@@ -47,6 +47,8 @@ Then create the tables: `npm run db:migrate`.
 - `src/proxy.ts` only checks that a session cookie exists on `/dashboard/*` and redirects to `/sign-in?next=...` otherwise. It is a convenience, not a security boundary.
 - `requireUser()` in `src/lib/session.ts` verifies the session against the database. Every page, Server Action and query on user data must call it and filter by the returned user's `id`.
 - `?next=` targets are sanitized by `safeNextPath()` so sign-in can only redirect within the app.
+- Google sign-in never attaches to an existing account with the same email (Better Auth `account.accountLinking.disableImplicitLinking`). Better Auth redirects to `/sign-in?error=account_not_linked` and the page asks the user to sign in with email and password. Other OAuth errors land on `/sign-in` with a generic message (`onAPIError.errorURL`).
+- Google access and refresh tokens are encrypted with `BETTER_AUTH_SECRET` before they are stored (`account.encryptOAuthTokens`). The Google id token is not stored, because Better Auth would keep it in plaintext and the app does not use it. Changing `BETTER_AUTH_SECRET` makes stored Google tokens unreadable; users only need to sign in with Google again.
 
 ## Scripts
 

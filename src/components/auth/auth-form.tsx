@@ -8,6 +8,7 @@ import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle }
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { authClient } from "@/lib/auth-client";
+import { runAuthRequest } from "./auth-errors";
 
 type Mode = "sign-in" | "sign-up";
 
@@ -30,9 +31,17 @@ const copy = {
   },
 } as const;
 
-export function AuthForm({ mode, next }: { mode: Mode; next: string }) {
+export function AuthForm({
+  mode,
+  next,
+  initialError = null,
+}: {
+  mode: Mode;
+  next: string;
+  initialError?: string | null;
+}) {
   const router = useRouter();
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(initialError);
   const [pending, setPending] = useState(false);
   const text = copy[mode];
 
@@ -44,14 +53,17 @@ export function AuthForm({ mode, next }: { mode: Mode; next: string }) {
     const email = String(form.get("email"));
     const password = String(form.get("password"));
 
-    const { error } =
-      mode === "sign-up"
-        ? await authClient.signUp.email({ name: String(form.get("name")), email, password })
-        : await authClient.signIn.email({ email, password });
+    const failure = await runAuthRequest(
+      () =>
+        mode === "sign-up"
+          ? authClient.signUp.email({ name: String(form.get("name")), email, password })
+          : authClient.signIn.email({ email, password }),
+      "Something went wrong. Please try again.",
+    );
 
     setPending(false);
-    if (error) {
-      setError(error.message ?? "Something went wrong. Please try again.");
+    if (failure) {
+      setError(failure);
       return;
     }
     router.push(next);
@@ -60,9 +72,21 @@ export function AuthForm({ mode, next }: { mode: Mode; next: string }) {
 
   async function onGoogle() {
     setError(null);
-    const { error } = await authClient.signIn.social({ provider: "google", callbackURL: next });
-    if (error) {
-      setError(error.message ?? "Google sign-in is not available right now.");
+    setPending(true);
+    const failure = await runAuthRequest(
+      () =>
+        authClient.signIn.social({
+          provider: "google",
+          callbackURL: next,
+          // Refusals such as an existing email account come back to sign-in as `?error=`.
+          errorCallbackURL: `/sign-in?next=${encodeURIComponent(next)}`,
+        }),
+      "Google sign-in is not available right now.",
+    );
+    // On success the browser is already leaving for Google, so the form stays disabled.
+    if (failure) {
+      setError(failure);
+      setPending(false);
     }
   }
 
@@ -106,7 +130,7 @@ export function AuthForm({ mode, next }: { mode: Mode; next: string }) {
             {pending ? "Please wait…" : text.submit}
           </Button>
         </form>
-        <Button type="button" variant="outline" onClick={onGoogle}>
+        <Button type="button" variant="outline" onClick={onGoogle} disabled={pending}>
           Continue with Google
         </Button>
       </CardContent>

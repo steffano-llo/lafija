@@ -27,6 +27,29 @@ export function createAuth({ db, secret, baseURL, google }: AuthConfig) {
     socialProviders: {
       google: { clientId: google.clientId, clientSecret: google.clientSecret },
     },
+    account: {
+      accountLinking: {
+        // Google sign-in never attaches to an existing account with the same email:
+        // Better Auth redirects with `?error=account_not_linked` instead.
+        disableImplicitLinking: true,
+      },
+      // Access and refresh tokens are encrypted with the auth secret before storage.
+      encryptOAuthTokens: true,
+    },
+    databaseHooks: {
+      account: {
+        // Better Auth stores the id token as received (encryptOAuthTokens skips it) and
+        // the app never reads it after sign-in, so it is not stored at all.
+        create: { before: async (account) => ({ data: { ...account, idToken: null } }) },
+        update: {
+          before: async (account) => ("idToken" in account ? { data: { ...account, idToken: null } } : undefined),
+        },
+      },
+    },
+    onAPIError: {
+      // OAuth failures land on the sign-in page, which explains the `error` code.
+      errorURL: new URL("/sign-in", baseURL).href,
+    },
     // nextCookies must stay last so Server Actions can set the session cookie.
     plugins: [nextCookies()],
   });
