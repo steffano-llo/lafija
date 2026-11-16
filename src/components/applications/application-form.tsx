@@ -5,6 +5,7 @@ import { useActionState } from "react";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { NativeSelect } from "@/components/ui/native-select";
 import { APPLICATION_LIMITS, type ApplicationField } from "@/lib/validation/application";
 import type { ApplicationFormAction, ApplicationFormValues } from "./form-state";
 
@@ -26,18 +27,24 @@ const fieldConfigs: FieldConfig[] = [
   { name: "appliedAt", label: "Applied on", type: "date" },
 ];
 
+/** A stage the form offers; `archived` only appears for an application's current stage. */
+export type StageOption = { id: string; name: string; archived?: boolean };
+
 export function ApplicationForm({
   action,
   initialValues = {},
   companies,
+  stages,
   submitLabel,
 }: {
   action: ApplicationFormAction;
   initialValues?: ApplicationFormValues;
   companies: string[];
+  stages: StageOption[];
   submitLabel: string;
 }) {
   const [state, formAction, pending] = useActionState(action, { values: initialValues });
+  const stageErrors = state.fieldErrors?.stageId;
 
   return (
     <form action={formAction} className="flex max-w-lg flex-col gap-4" noValidate>
@@ -71,6 +78,27 @@ export function ApplicationForm({
           </div>
         );
       })}
+      <div className="flex flex-col gap-2">
+        <Label htmlFor="stageId">Stage</Label>
+        <NativeSelect
+          id="stageId"
+          name="stageId"
+          defaultValue={state.values.stageId ?? stages[0]?.id ?? ""}
+          aria-invalid={stageErrors ? true : undefined}
+          aria-describedby={stageErrors ? "stageId-error" : undefined}
+        >
+          {stages.map((stage) => (
+            <option key={stage.id} value={stage.id}>
+              {stage.archived ? `${stage.name} (archived)` : stage.name}
+            </option>
+          ))}
+        </NativeSelect>
+        {stageErrors && (
+          <p id="stageId-error" className="text-sm text-destructive">
+            {stageErrors[0]}
+          </p>
+        )}
+      </div>
       <datalist id="company-options">
         {companies.map((name) => (
           <option key={name} value={name} />

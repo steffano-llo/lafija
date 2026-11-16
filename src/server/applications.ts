@@ -3,8 +3,10 @@ import "server-only";
 import { and, asc, desc, eq, sql } from "drizzle-orm";
 import type { PgDatabase, PgQueryResultHKT } from "drizzle-orm/pg-core";
 import * as schema from "@/db/schema";
-import { application, company } from "@/db/schema";
+import { application, company, stage } from "@/db/schema";
 import { parseApplicationInput, type FieldErrors } from "@/lib/validation/application";
+import type { StageCategory } from "@/lib/validation/stage";
+import { ensureDefaultStages } from "./stages";
 
 /**
  * Any Drizzle Postgres database with the app schema: Neon HTTP in the app, PGlite in tests.
@@ -18,6 +20,10 @@ const applicationColumns = {
   id: application.id,
   companyId: application.companyId,
   companyName: company.name,
+  stageId: application.stageId,
+  stageName: stage.name,
+  stageCategory: stage.category,
+  stageArchived: stage.archived,
   role: application.role,
   url: application.url,
   source: application.source,
@@ -32,6 +38,10 @@ export type Application = {
   id: string;
   companyId: string;
   companyName: string;
+  stageId: string;
+  stageName: string;
+  stageCategory: StageCategory;
+  stageArchived: boolean;
   role: string;
   url: string | null;
   source: string | null;
@@ -87,6 +97,7 @@ export async function listApplications(
     .select(applicationColumns)
     .from(application)
     .innerJoin(company, eq(company.id, application.companyId))
+    .innerJoin(stage, eq(stage.id, application.stageId))
     .where(and(eq(application.userId, userId), eq(application.archived, archived)))
     .orderBy(sql`${application.appliedAt} desc nulls last`, desc(application.createdAt));
 }
@@ -97,9 +108,48 @@ export async function getApplication(db: Db, userId: string, id: string): Promis
     .select(applicationColumns)
     .from(application)
     .innerJoin(company, eq(company.id, application.companyId))
+    .innerJoin(stage, eq(stage.id, application.stageId))
     .where(and(eq(application.userId, userId), eq(application.id, id)))
     .limit(1);
   return row ?? null;
+}
+
+const invalidStage = (): ApplicationResult => ({
+  ok: false,
+  reason: "invalid",
+  fieldErrors: { stageId: ["Choose a valid stage."] },
+});
+
+/**
+ * The stage an application should be stored in, or null when the requested one is not allowed.
+ * Allowed: one of the user's non-archived stages, or the application's current stage (kept on edit
+ * even if it was archived since). No stage requested: the current one, else the first active stage.
+ */
+async function resolveStageId(
+  db: Db,
+  userId: string,
+  requested: string | undefined,
+  currentStageId?: string,
+): Promise<string | null> {
+  if (requested === undefined) {
+    if (currentStageId) return currentStageId;
+    await ensureDefaultStages(db, userId);
+    const [first] = await db
+      .select({ id: stage.id })
+      .from(stage)
+      .where(and(eq(stage.userId, userId), eq(stage.archived, false)))
+      .orderBy(asc(stage.position), asc(stage.createdAt), asc(stage.id))
+      .limit(1);
+    if (!first) throw new Error("User has no active stage");
+    return first.id;
+  }
+  if (requested === currentStageId) return requested;
+  const [row] = await db
+    .select({ id: stage.id })
+    .from(stage)
+    .where(and(eq(stage.userId, userId), eq(stage.id, requested), eq(stage.archived, false)))
+    .limit(1);
+  return row?.id ?? null;
 }
 
 async function loaded(db: Db, userId: string, id: string): Promise<ApplicationResult> {
@@ -111,19 +161,23 @@ async function loaded(db: Db, userId: string, id: string): Promise<ApplicationRe
 export async function createApplication(db: Db, userId: string, input: unknown): Promise<ApplicationResult> {
   const parsed = parseApplicationInput(input);
   if (!parsed.success) return { ok: false, reason: "invalid", fieldErrors: parsed.fieldErrors };
-  const { companyName, ...fields } = parsed.data;
+  const { companyName, stageId: requestedStageId, ...fields } = parsed.data;
 
+  // Checked before the company is found or created, so a refused stage has no side effects.
+  const stageId = await resolveStageId(db, userId, requestedStageId);
+  if (!stageId) return invalidStage();
   const target = await findOrCreateCompany(db, userId, companyName);
   const [row] = await db
     .insert(application)
-    .values({ ...fields, userId, companyId: target.id })
+    .values({ ...fields, userId, companyId: target.id, stageId })
     .returning({ id: application.id });
   return loaded(db, userId, row.id);
 }
 
 /**
  * Replaces the editable fields of the user's application. Ownership is checked first,
- * so a foreign or unknown id never creates a company for the caller.
+ * so a foreign or unknown id never creates a company for the caller. A missing `stageId`
+ * keeps the current stage.
  */
 export async function updateApplication(
   db: Db,
@@ -131,15 +185,18 @@ export async function updateApplication(
   id: string,
   input: unknown,
 ): Promise<ApplicationResult> {
-  if (!(await getApplication(db, userId, id))) return notFound;
+  const current = await getApplication(db, userId, id);
+  if (!current) return notFound;
   const parsed = parseApplicationInput(input);
   if (!parsed.success) return { ok: false, reason: "invalid", fieldErrors: parsed.fieldErrors };
-  const { companyName, ...fields } = parsed.data;
+  const { companyName, stageId: requestedStageId, ...fields } = parsed.data;
 
+  const stageId = await resolveStageId(db, userId, requestedStageId, current.stageId);
+  if (!stageId) return invalidStage();
   const target = await findOrCreateCompany(db, userId, companyName);
   const updated = await db
     .update(application)
-    .set({ ...fields, companyId: target.id })
+    .set({ ...fields, companyId: target.id, stageId })
     .where(and(eq(application.userId, userId), eq(application.id, id)))
     .returning({ id: application.id });
   if (updated.length === 0) return notFound;

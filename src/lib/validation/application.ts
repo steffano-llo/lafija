@@ -83,6 +83,11 @@ export const applicationInputSchema = z.object({
       .refine(isCalendarDate, { message: "Enter a valid date.", abort: true })
       .refine((value) => value <= latestAllowedDate(), "Applied date cannot be in the future."),
   ),
+  // Blank or missing means "the first active stage"; ownership is checked against the database.
+  stageId: z.preprocess(
+    (value) => (typeof value === "string" && value.trim() === "" ? undefined : value),
+    z.string({ error: "Choose a valid stage." }).trim().max(64, "Choose a valid stage.").optional(),
+  ),
 });
 
 export type ApplicationInput = z.output<typeof applicationInputSchema>;

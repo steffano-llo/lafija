@@ -1,5 +1,19 @@
 import { sql } from "drizzle-orm";
-import { boolean, date, foreignKey, index, pgTable, text, timestamp, unique, uniqueIndex } from "drizzle-orm/pg-core";
+import {
+  boolean,
+  date,
+  foreignKey,
+  index,
+  integer,
+  pgEnum,
+  pgTable,
+  text,
+  timestamp,
+  unique,
+  uniqueIndex,
+} from "drizzle-orm/pg-core";
+// Relative import: drizzle-kit loads this file without the `@/` path alias.
+import { STAGE_CATEGORIES } from "../lib/validation/stage";
 
 // Better Auth core tables (better-auth 1.7). Model keys must stay
 // `user`, `session`, `account` and `verification` for the Drizzle adapter.
@@ -94,6 +108,36 @@ export const company = pgTable(
   ],
 );
 
+export const stageCategory = pgEnum("stage_category", STAGE_CATEGORIES);
+
+export const stage = pgTable(
+  "stage",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => crypto.randomUUID()),
+    userId: text("user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    category: stageCategory("category").notNull(),
+    // Display order within the user's stages, ascending.
+    position: integer("position").notNull(),
+    archived: boolean("archived").notNull().default(false),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow()
+      .$onUpdate(() => new Date()),
+  },
+  (table) => [
+    // One stage per name and user, ignoring case.
+    uniqueIndex("stage_user_id_name_idx").on(table.userId, sql`lower(${table.name})`),
+    // Target of the composite foreign key from application.
+    unique("stage_id_user_id_unique").on(table.id, table.userId),
+  ],
+);
+
 export const application = pgTable(
   "application",
   {
@@ -104,6 +148,7 @@ export const application = pgTable(
       .notNull()
       .references(() => user.id, { onDelete: "cascade" }),
     companyId: text("company_id").notNull(),
+    stageId: text("stage_id").notNull(),
     role: text("role").notNull(),
     url: text("url"),
     source: text("source"),
@@ -124,5 +169,12 @@ export const application = pgTable(
       columns: [table.companyId, table.userId],
       foreignColumns: [company.id, company.userId],
     }),
+    // The stage must belong to the same user; a used stage cannot be deleted.
+    foreignKey({
+      name: "application_stage_id_user_id_fk",
+      columns: [table.stageId, table.userId],
+      foreignColumns: [stage.id, stage.userId],
+    }),
+    index("application_stage_id_idx").on(table.stageId),
   ],
 );

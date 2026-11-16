@@ -6,6 +6,7 @@ import { ApplicationForm } from "@/components/applications/application-form";
 import { getDb } from "@/db";
 import { requireUser } from "@/lib/session";
 import { getApplication, listCompanies } from "@/server/applications";
+import { listStages } from "@/server/stages";
 import { updateApplicationAction } from "../../actions";
 
 export const metadata: Metadata = { title: "Edit application · laFija" };
@@ -16,9 +17,17 @@ async function EditApplicationForm({ params }: { params: Params }) {
   const user = await requireUser();
   const { id } = await params;
   const db = getDb();
-  const [application, companies] = await Promise.all([getApplication(db, user.id, id), listCompanies(db, user.id)]);
+  const [application, companies, stages] = await Promise.all([
+    getApplication(db, user.id, id),
+    listCompanies(db, user.id),
+    listStages(db, user.id),
+  ]);
   // Unknown and foreign ids look the same: not found.
   if (!application) notFound();
+  // Active stages, plus the current one even if it was archived since, so saving keeps it.
+  const stageOptions = stages
+    .filter((stage) => !stage.archived || stage.id === application.stageId)
+    .map(({ id, name, archived }) => ({ id, name, archived }));
 
   return (
     <ApplicationForm
@@ -26,12 +35,14 @@ async function EditApplicationForm({ params }: { params: Params }) {
       initialValues={{
         companyName: application.companyName,
         role: application.role,
+        stageId: application.stageId,
         url: application.url ?? "",
         source: application.source ?? "",
         salaryRange: application.salaryRange ?? "",
         appliedAt: application.appliedAt ?? "",
       }}
       companies={companies.map((company) => company.name)}
+      stages={stageOptions}
       submitLabel="Save changes"
     />
   );

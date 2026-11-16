@@ -23,9 +23,12 @@ export default function DashboardPage() {
       <Suspense fallback={<p className="text-muted-foreground">Loading…</p>}>
         <SignedInAs />
       </Suspense>
-      <nav aria-label="Sections">
+      <nav aria-label="Sections" className="flex flex-wrap gap-2">
         <Link href="/dashboard/applications" className={buttonVariants()}>
           View applications
+        </Link>
+        <Link href="/dashboard/stages" className={buttonVariants({ variant: "outline" })}>
+          Manage stages
         </Link>
       </nav>
     </main>

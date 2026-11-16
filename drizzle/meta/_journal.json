@@ -15,6 +15,13 @@
       "when": 1794803064381,
       "tag": "0001_companies_and_applications",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1794804314694,
+      "tag": "0002_stages",
+      "breakpoints": true
     }
   ]
 }

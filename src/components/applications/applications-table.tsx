@@ -26,6 +26,7 @@ export function ApplicationsTable({ applications, archived }: { applications: Ap
           <tr>
             <th scope="col" className="px-3 py-2 font-medium">Company</th>
             <th scope="col" className="px-3 py-2 font-medium">Role</th>
+            <th scope="col" className="px-3 py-2 font-medium">Stage</th>
             <th scope="col" className="px-3 py-2 font-medium">Applied</th>
             <th scope="col" className="px-3 py-2 font-medium">Source</th>
             <th scope="col" className="px-3 py-2 font-medium">
@@ -45,6 +46,10 @@ export function ApplicationsTable({ applications, archived }: { applications: Ap
                 ) : (
                   item.role
                 )}
+              </td>
+              <td className="px-3 py-2">
+                {item.stageName}
+                {item.stageArchived && <span className="text-muted-foreground"> (archived)</span>}
               </td>
               <td className="px-3 py-2 whitespace-nowrap">{formatAppliedDate(item.appliedAt)}</td>
               <td className="px-3 py-2">{item.source ?? "—"}</td>

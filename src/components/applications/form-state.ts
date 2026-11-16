@@ -11,7 +11,7 @@ export type ApplicationFormState = {
 
 export type ApplicationFormAction = (state: ApplicationFormState, formData: FormData) => Promise<ApplicationFormState>;
 
-const fields: ApplicationField[] = ["companyName", "role", "url", "source", "salaryRange", "appliedAt"];
+const fields: ApplicationField[] = ["companyName", "role", "stageId", "url", "source", "salaryRange", "appliedAt"];
 
 /** Reads only the known fields, ignoring React's `$ACTION_` entries and anything else posted. */
 export function readApplicationForm(formData: FormData): ApplicationFormValues {
