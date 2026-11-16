@@ -9,7 +9,7 @@ import type { StageCategory } from "@/lib/validation/stage";
 import { bottomKey } from "./board";
 import { isId } from "./ids";
 import { runAtomic } from "./atomic";
-import { syncFollowUpSql } from "./reminders";
+import { closeArchivedFollowUpSql, syncFollowUpSql } from "./reminders";
 import { ensureDefaultStages } from "./stages";
 
 /**
@@ -276,8 +276,8 @@ export async function updateApplication(
  * Archives or restores the user's application. Restoring is refused (`stage_archived`) while its
  * stage is archived, so no active application ever sits in an archived stage: the user unarchives
  * the stage or edits the application into another stage first. The check is part of the update.
- * Archiving syncs (closes) the open automatic follow-up in a second statement of the same
- * transaction; restoring creates none.
+ * Archiving closes the open automatic follow-up in a second statement of the same transaction
+ * (`closeArchivedFollowUpSql`, a no-op when nothing was archived); restoring creates none.
  */
 export async function setApplicationArchived(
   db: Db,
@@ -298,7 +298,7 @@ export async function setApplicationArchived(
         where "id" = ${id} and "user_id" = ${userId}
         returning "id"
       `,
-      syncFollowUpSql(userId, id),
+      closeArchivedFollowUpSql(userId, id),
     ]);
   } else {
     updated = await db

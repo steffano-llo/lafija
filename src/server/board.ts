@@ -161,7 +161,7 @@ export async function bottomKey(db: Db, userId: string, stageId: string): Promis
  * update, so one never happens without the other; a reorder within the column records nothing.
  * A second statement in the same transaction then syncs the automatic follow-up reminder
  * (`syncFollowUpSql`): after a stage change the old one is closed and, in an active stage, a new
- * one starts; with consistent data a reorder changes no reminder.
+ * one starts; a reorder or a refused move writes no transition, so it changes no reminder.
  */
 export async function moveApplication(
   db: Db,

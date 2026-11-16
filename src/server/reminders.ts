@@ -84,43 +84,52 @@ const currentTransitionSql = (a: SQL): SQL => sql`(
 )`;
 
 /**
- * One statement that brings the automatic follow-up of the user's application in line with
- * committed data. Wanted: one open follow-up for the application's current transition (see
- * `currentTransitionSql`) when the application is not archived, its stage's category is `active`
- * and the user's follow-up days are not off. The statement closes every other open follow-up of the
- * application and inserts the wanted one, due that many days after the transition, unless a
- * follow-up of that transition already exists, open or done: one the user marked done stays done.
- * Idempotent. Callers run it after the statement that locks and writes the application, in the
- * same transaction (`runAtomic`): under READ COMMITTED it then reads a snapshot taken after the
- * lock, so it sees whatever a concurrent writer of the same application committed first.
+ * The follow-up step of a stage change (create, board move, edit-form stage change). Callers run
+ * it right after the statement that locks and writes the application, in the same transaction
+ * (`runAtomic`). It acts only on a transition of this application written in this transaction:
+ * `stage_transition.at` defaults to `now()`, which Postgres fixes for the whole transaction, so
+ * `at = now()` finds it. No such transition (a refused write, a reorder within a column, an edit
+ * that keeps the stage) means the statement changes nothing.
+ *
+ * With that transition, the wanted state is one open follow-up for it when the application is not
+ * archived, its stage's category is `active` and the user's follow-up days are not off (the setting
+ * only gates creation, so changing it applies to later transitions only). The statement closes
+ * every other open follow-up of the application and inserts the wanted one, due that many days
+ * after the transition, unless a follow-up of that transition already exists, open or done: one
+ * the user marked done stays done. Idempotent. Under READ COMMITTED it reads a snapshot taken after
+ * the row lock, so it sees whatever a concurrent writer of the same application committed first.
  */
 export function syncFollowUpSql(userId: string, applicationId: string): SQL {
   return sql`
-    with "app" as (
-      select a."id", a."user_id", a."stage_id", a."company_id", a."role", a."archived",
-        ${currentTransitionSql(sql`a`)} as "transition_id"
-      from "application" a
-      where a."id" = ${applicationId} and a."user_id" = ${userId}
+    with "fresh" as (
+      select st."id", st."at", a."user_id", a."id" as "application_id", a."stage_id", a."company_id",
+        a."role", a."archived"
+      from "stage_transition" st
+      join "application" a on a."id" = st."application_id" and a."user_id" = st."user_id"
+        and a."stage_id" = st."to_stage_id"
+      where st."application_id" = ${applicationId} and st."user_id" = ${userId} and st."at" = now()
+      order by (st."from_stage_id" is not null) desc, st."id" desc
+      limit 1
     ),
     "wanted" as (
-      select a."id" as "application_id", a."user_id", st."id" as "transition_id",
-        st."at" + make_interval(days => f."days") as "due_at",
-        left('Follow up with ' || co."name" || ' about ' || a."role", 500) as "message"
-      from "app" a
-      join "stage_transition" st on st."id" = a."transition_id" and st."user_id" = a."user_id"
-      join "stage" s on s."id" = a."stage_id" and s."user_id" = a."user_id" and s."category" = 'active'
-      join "company" co on co."id" = a."company_id" and co."user_id" = a."user_id"
+      select fr."application_id", fr."user_id", fr."id" as "transition_id",
+        fr."at" + make_interval(days => f."days") as "due_at",
+        left('Follow up with ' || co."name" || ' about ' || fr."role", 500) as "message"
+      from "fresh" fr
+      join "stage" s on s."id" = fr."stage_id" and s."user_id" = fr."user_id" and s."category" = 'active'
+      join "company" co on co."id" = fr."company_id" and co."user_id" = fr."user_id"
       cross join lateral (
         -- No settings row means the default; a row with null means follow-ups are off.
         select case when us."user_id" is null then ${FOLLOW_UP_DAYS_DEFAULT}::int else us."follow_up_days" end as "days"
-        from (select 1) as "one" left join "user_settings" us on us."user_id" = a."user_id"
+        from (select 1) as "one" left join "user_settings" us on us."user_id" = fr."user_id"
       ) f
-      where not a."archived" and f."days" is not null
+      where not fr."archived" and f."days" is not null
     ),
     "closed" as (
       update "reminder" r set "done_at" = now(), "updated_at" = now()
       where r."application_id" = ${applicationId} and r."user_id" = ${userId}
         and r."kind" = 'follow_up' and r."done_at" is null
+        and exists (select 1 from "fresh")
         and r."transition_id" is distinct from (select w."transition_id" from "wanted" w)
       returning r."id"
     ),
@@ -140,9 +149,37 @@ export function syncFollowUpSql(userId: string, applicationId: string): SQL {
   `;
 }
 
-/** Runs `syncFollowUpSql` on its own (tests and repairs); writers batch it after their statement. */
-export async function syncFollowUp(db: Db, userId: string, applicationId: string): Promise<void> {
-  await db.execute(syncFollowUpSql(userId, applicationId));
+/**
+ * The follow-up step of archiving, run after the archive update in the same transaction: closes
+ * the application's open follow-up only if the application is archived (and the user's), so a
+ * refused archive changes nothing. Idempotent.
+ */
+export function closeArchivedFollowUpSql(userId: string, applicationId: string): SQL {
+  return sql`
+    update "reminder" r set "done_at" = now(), "updated_at" = now()
+    where r."application_id" = ${applicationId} and r."user_id" = ${userId}
+      and r."kind" = 'follow_up' and r."done_at" is null
+      and exists (
+        select 1 from "application" a
+        where a."id" = r."application_id" and a."user_id" = r."user_id" and a."archived"
+      )
+    returning r."id"
+  `;
+}
+
+/**
+ * Runs one follow-up step on its own (tests): `transition` is `syncFollowUpSql`, `archive` is
+ * `closeArchivedFollowUpSql`. Writers batch them after their statement instead.
+ */
+export async function syncFollowUp(
+  db: Db,
+  userId: string,
+  applicationId: string,
+  step: "transition" | "archive" = "transition",
+): Promise<void> {
+  await db.execute(
+    step === "archive" ? closeArchivedFollowUpSql(userId, applicationId) : syncFollowUpSql(userId, applicationId),
+  );
 }
 
 /** True for a unique violation (23505), raw or wrapped by Drizzle in `cause`. */
@@ -382,12 +419,9 @@ export async function getFollowUpDays(db: Db, userId: string): Promise<number | 
 }
 
 /**
- * Sets the user's follow-up days (1-60) or turns automatic follow-ups off. Only later syncs use the
- * new value: existing reminders are not touched now. The next write of an application (create,
- * edit, board move or reorder, archive) syncs its follow-up: when off, that closes its open
- * follow-up; a new number of days never moves an existing follow-up's due time; turned back on, an
- * application in an active stage without a follow-up for its current transition gets one, due that
- * many days after that transition.
+ * Sets the user's follow-up days (1-60) or turns automatic follow-ups off. Forward only: existing
+ * reminders are never touched, now or later; the setting only decides whether, and when due, a
+ * follow-up is created for later transitions into an active stage.
  */
 export async function setFollowUpDays(db: Db, userId: string, input: unknown): Promise<FollowUpSettingsResult> {
   const parsed = parseFollowUpSettings(input);
