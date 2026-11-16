@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { setApplicationArchivedAction } from "@/app/dashboard/applications/actions";
+import { SECONDARY_ACTION } from "@/components/actions/action-styles";
 import { buttonVariants } from "@/components/ui/button";
 import type { Application } from "@/server/applications";
 import { ArchiveButton } from "./archive-button";
@@ -56,14 +57,14 @@ export function ApplicationsTable({ applications, archived }: { applications: Ap
                 <div className="flex items-start justify-end gap-2">
                   <Link
                     href={`/dashboard/applications/${item.id}`}
-                    className={buttonVariants({ variant: "outline", size: "sm" })}
+                    className={buttonVariants(SECONDARY_ACTION)}
                     aria-label={`View ${item.role} at ${item.companyName}`}
                   >
                     View
                   </Link>
                   <Link
                     href={`/dashboard/applications/${item.id}/edit`}
-                    className={buttonVariants({ variant: "outline", size: "sm" })}
+                    className={buttonVariants(SECONDARY_ACTION)}
                     aria-label={`Edit ${item.role} at ${item.companyName}`}
                   >
                     Edit

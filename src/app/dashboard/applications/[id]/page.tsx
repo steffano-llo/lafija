@@ -10,6 +10,7 @@ import { ContactsSection } from "@/components/contacts/contacts-section";
 import { InterviewsSection } from "@/components/interviews/interviews-section";
 import { toReminderItem } from "@/components/reminders/form-state";
 import { RemindersSection } from "@/components/reminders/reminders-section";
+import { SECONDARY_ACTION } from "@/components/actions/action-styles";
 import { buttonVariants } from "@/components/ui/button";
 import { getDb } from "@/db";
 import { requireUser } from "@/lib/session";
@@ -61,7 +62,7 @@ async function ApplicationDetail({ params }: { params: Params }) {
         </div>
         <Link
           href={`/dashboard/applications/${application.id}/edit`}
-          className={buttonVariants({ variant: "outline" })}
+          className={buttonVariants(SECONDARY_ACTION)}
           aria-label={`Edit ${application.role} at ${application.companyName}`}
         >
           Edit

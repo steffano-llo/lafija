@@ -13,6 +13,8 @@ import {
   fromLocalInputValue,
   toLocalInputValue,
 } from "@/components/applications/local-date-time";
+import { SECONDARY_ACTION } from "@/components/actions/action-styles";
+import { ConfirmActionButton } from "@/components/actions/confirm-dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -155,7 +157,7 @@ function InterviewForm({
         <Button type="submit" size="sm" disabled={pending}>
           {pending ? "Saving…" : submitLabel}
         </Button>
-        <Button type="button" size="sm" variant="outline" onClick={onDone}>
+        <Button type="button" {...SECONDARY_ACTION} onClick={onDone}>
           Cancel
         </Button>
       </div>
@@ -218,23 +220,24 @@ function InterviewRow({ applicationId, interview }: { applicationId: string; int
               </option>
             ))}
           </NativeSelect>
-          <Button type="submit" size="sm" variant="outline" disabled={outcomePending} aria-label={`Set outcome of the ${name}`}>
+          <Button type="submit" {...SECONDARY_ACTION} disabled={outcomePending} aria-label={`Set outcome of the ${name}`}>
             Set outcome
           </Button>
         </form>
-        <Button type="button" size="sm" variant="outline" onClick={() => setEditing(true)} aria-label={`Edit the ${name}`}>
+        <Button type="button" {...SECONDARY_ACTION} onClick={() => setEditing(true)} aria-label={`Edit the ${name}`}>
           Edit
         </Button>
-        <form
-          action={deleteAction}
-          onSubmit={(event) => {
-            if (!window.confirm(`Delete this ${name}?`)) event.preventDefault();
-          }}
-        >
-          <Button type="submit" size="sm" variant="ghost" disabled={deletePending} aria-label={`Delete the ${name}`}>
-            Delete
-          </Button>
-        </form>
+        <ConfirmActionButton
+          ariaLabel={`Delete the ${name}`}
+          disabled={deletePending}
+          title={
+            <>
+              Delete the {name} of <LocalDateTime value={interview.scheduledAt} />?
+            </>
+          }
+          description="Its date, type, outcome and notes will be removed. This cannot be undone."
+          onConfirm={() => deleteAction()}
+        />
       </div>
       {(outcomeState.message ?? deleteState.message) && (
         <p role="alert" className="text-sm text-destructive">

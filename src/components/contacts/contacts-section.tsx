@@ -9,6 +9,8 @@ import {
   updateContactAction,
 } from "@/app/dashboard/applications/[id]/actions";
 import type { DetailFormAction, DetailFormState } from "@/components/applications/form-state";
+import { SECONDARY_ACTION } from "@/components/actions/action-styles";
+import { ConfirmActionButton } from "@/components/actions/confirm-dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -105,7 +107,7 @@ function ContactForm({
         <Button type="submit" size="sm" disabled={pending}>
           {pending ? "Saving…" : submitLabel}
         </Button>
-        <Button type="button" size="sm" variant="outline" onClick={onDone}>
+        <Button type="button" {...SECONDARY_ACTION} onClick={onDone}>
           Cancel
         </Button>
       </div>
@@ -170,32 +172,24 @@ function ContactRow({ applicationId, contact }: { applicationId: string; contact
         {contact.notes && <p className="text-sm whitespace-pre-wrap">{contact.notes}</p>}
       </div>
       <div className="flex flex-wrap gap-2">
-        <Button type="button" size="sm" variant="outline" onClick={() => setEditing(true)} aria-label={`Edit ${contact.name}`}>
+        <Button type="button" {...SECONDARY_ACTION} onClick={() => setEditing(true)} aria-label={`Edit ${contact.name}`}>
           Edit
         </Button>
-        <form action={unlinkAction}>
-          <Button
-            type="submit"
-            size="sm"
-            variant="outline"
-            disabled={unlinkPending}
-            aria-label={`Unlink ${contact.name} from this application`}
-          >
-            Unlink
-          </Button>
-        </form>
-        <form
-          action={deleteAction}
-          onSubmit={(event) => {
-            if (!window.confirm(`Delete ${contact.name}? They will be removed from every application.`)) {
-              event.preventDefault();
-            }
-          }}
-        >
-          <Button type="submit" size="sm" variant="ghost" disabled={deletePending} aria-label={`Delete ${contact.name}`}>
-            Delete
-          </Button>
-        </form>
+        <ConfirmActionButton
+          label="Unlink"
+          ariaLabel={`Unlink ${contact.name} from this application`}
+          disabled={unlinkPending}
+          title={`Unlink ${contact.name} from this application?`}
+          description={`${contact.name} stays in your contacts and can be linked again.`}
+          onConfirm={() => unlinkAction()}
+        />
+        <ConfirmActionButton
+          ariaLabel={`Delete ${contact.name}`}
+          disabled={deletePending}
+          title={`Delete ${contact.name}?`}
+          description={`${contact.name} will be removed from every application. This cannot be undone.`}
+          onConfirm={() => deleteAction()}
+        />
       </div>
       {message && (
         <p role="alert" className="text-sm text-destructive">
@@ -223,7 +217,7 @@ function LinkContactForm({ applicationId, linkable }: { applicationId: string; l
             ))}
           </NativeSelect>
         </div>
-        <Button type="submit" size="sm" variant="outline" disabled={pending}>
+        <Button type="submit" {...SECONDARY_ACTION} disabled={pending}>
           Link
         </Button>
       </div>

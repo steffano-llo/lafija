@@ -1,12 +1,9 @@
 "use client";
 
-import Link from "next/link";
-import { LocalDateTime } from "@/components/applications/local-date-time";
-import { REMINDER_KIND_LABELS } from "@/lib/validation/reminder";
 import type { ReminderItem } from "./form-state";
-import { ReminderActions } from "./reminder-actions";
+import { ReminderCard } from "./reminder-card";
 
-/** One section of the reminders page (Due, Upcoming or Done) with done, snooze and a link to the application. */
+/** One section of the reminders page (Due, Upcoming or Done); each reminder links to its application. */
 export function ReminderList({
   id,
   title,
@@ -28,23 +25,7 @@ export function ReminderList({
       ) : (
         <ul className="flex flex-col gap-2">
           {reminders.map((reminder) => (
-            <li key={reminder.id} className="flex flex-col gap-2 rounded-lg p-3 ring-1 ring-foreground/10">
-              <div className="flex flex-wrap items-baseline justify-between gap-2">
-                <p className={reminder.doneAt ? "text-muted-foreground line-through" : "font-medium"}>
-                  {reminder.message}
-                </p>
-                <span className="text-sm text-muted-foreground">
-                  {REMINDER_KIND_LABELS[reminder.kind]} · due <LocalDateTime value={reminder.dueAt} />
-                </span>
-              </div>
-              <Link
-                href={`/dashboard/applications/${reminder.applicationId}`}
-                className="w-fit text-sm underline-offset-4 hover:underline"
-              >
-                {reminder.role} at {reminder.companyName}
-              </Link>
-              <ReminderActions reminder={reminder} />
-            </li>
+            <ReminderCard key={reminder.id} reminder={reminder} showApplication />
           ))}
         </ul>
       )}

@@ -1,6 +1,7 @@
 "use client";
 
 import { useActionState } from "react";
+import { SECONDARY_ACTION } from "@/components/actions/action-styles";
 import { Button } from "@/components/ui/button";
 import type { ArchiveState } from "./form-state";
 
@@ -19,7 +20,7 @@ export function ArchiveButton({
 
   return (
     <form action={formAction} className="flex flex-col items-end gap-1">
-      <Button type="submit" variant="ghost" size="sm" disabled={pending} aria-label={`${verb} ${label}`}>
+      <Button type="submit" {...SECONDARY_ACTION} disabled={pending} aria-label={`${verb} ${label}`}>
         {verb}
       </Button>
       {state.message && (

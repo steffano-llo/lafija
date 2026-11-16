@@ -1,36 +1,57 @@
 "use client";
 
-import { useActionState } from "react";
+import { MoreHorizontalIcon } from "lucide-react";
+import { startTransition, useActionState, useRef, useState } from "react";
 import {
   deleteReminderAction,
   setReminderDoneAction,
   snoozeReminderAction,
 } from "@/app/dashboard/reminders/actions";
 import type { DetailButtonState } from "@/components/applications/form-state";
+import {
+  SECONDARY_ACTION,
+  canSnooze,
+  reminderMenuLabel,
+  reminderName,
+  snoozeLabel,
+} from "@/components/actions/action-styles";
+import { ConfirmDialog } from "@/components/actions/confirm-dialog";
 import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { SNOOZE_DAYS } from "@/lib/validation/reminder";
 import type { ReminderItem } from "./form-state";
 
-const snoozeLabel = (days: number) => (days === 1 ? "1 day" : `${days} days`);
-
 /**
- * Done / reopen, snooze (open reminders only) and, when `canDelete`, delete. Buttons name the
- * reminder for screen readers; any refusal is shown under them.
+ * Done (the main action) or Reopen once done; a Snooze menu (1, 3 or 7 days) for open reminders
+ * only, because the server refuses to snooze a done one; and a ⋯ menu with Edit and Delete, which
+ * asks for confirmation. Menus work with the keyboard and give focus back to their button. Any
+ * refusal is shown under the buttons.
  */
-export function ReminderActions({ reminder, canDelete = false }: { reminder: ReminderItem; canDelete?: boolean }) {
+export function ReminderActions({ reminder, onEdit }: { reminder: ReminderItem; onEdit: () => void }) {
   const done = reminder.doneAt !== null;
-  const run = (action: () => Promise<DetailButtonState>) => async () => action();
   const [doneState, doneAction, donePending] = useActionState(
-    run(() => setReminderDoneAction(reminder.id, !done)),
+    async (): Promise<DetailButtonState> => setReminderDoneAction(reminder.id, !done),
     {},
   );
   const [snoozeState, snoozeAction, snoozePending] = useActionState(
-    async (_state: DetailButtonState, formData: FormData) => snoozeReminderAction(reminder.id, formData.get("days")),
+    async (_state: DetailButtonState, days: string): Promise<DetailButtonState> =>
+      snoozeReminderAction(reminder.id, days),
     {},
   );
-  const [deleteState, deleteAction, deletePending] = useActionState(run(() => deleteReminderAction(reminder.id)), {});
+  const [deleteState, deleteAction, deletePending] = useActionState(
+    async (): Promise<DetailButtonState> => deleteReminderAction(reminder.id),
+    {},
+  );
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const moreButton = useRef<HTMLButtonElement>(null);
   const message = doneState.message ?? snoozeState.message ?? deleteState.message;
-  const name = `reminder “${reminder.message}”`;
+  const name = reminderName(reminder.message);
 
   return (
     <div className="flex flex-col gap-1">
@@ -46,38 +67,57 @@ export function ReminderActions({ reminder, canDelete = false }: { reminder: Rem
             {done ? "Reopen" : "Done"}
           </Button>
         </form>
-        {!done && (
-          <form action={snoozeAction} className="flex items-center gap-1">
-            <span className="text-xs text-muted-foreground">Snooze</span>
-            {SNOOZE_DAYS.map((days) => (
+        {canSnooze(reminder) && (
+          <DropdownMenu>
+            <DropdownMenuTrigger
+              render={<Button type="button" {...SECONDARY_ACTION} disabled={snoozePending} aria-label={`Snooze ${name}`} />}
+            >
+              Snooze
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start">
+              {SNOOZE_DAYS.map((days) => (
+                <DropdownMenuItem
+                  key={days}
+                  onClick={() => startTransition(() => snoozeAction(String(days)))}
+                >
+                  {snoozeLabel(days)}
+                </DropdownMenuItem>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
+        )}
+        <DropdownMenu>
+          <DropdownMenuTrigger
+            render={
               <Button
-                key={days}
-                type="submit"
-                name="days"
-                value={String(days)}
-                size="sm"
+                ref={moreButton}
+                type="button"
                 variant="outline"
-                disabled={snoozePending}
-                aria-label={`Snooze ${name} for ${snoozeLabel(days)}`}
-              >
-                {snoozeLabel(days)}
-              </Button>
-            ))}
-          </form>
-        )}
-        {canDelete && (
-          <form
-            action={deleteAction}
-            onSubmit={(event) => {
-              if (!window.confirm("Delete this reminder?")) event.preventDefault();
-            }}
+                size="icon-sm"
+                disabled={deletePending}
+                aria-label={reminderMenuLabel(reminder.message)}
+              />
+            }
           >
-            <Button type="submit" size="sm" variant="ghost" disabled={deletePending} aria-label={`Delete ${name}`}>
+            <MoreHorizontalIcon aria-hidden="true" />
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end">
+            <DropdownMenuItem onClick={onEdit}>Edit</DropdownMenuItem>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem variant="destructive" onClick={() => setConfirmingDelete(true)}>
               Delete
-            </Button>
-          </form>
-        )}
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
       </div>
+      <ConfirmDialog
+        open={confirmingDelete}
+        onOpenChange={setConfirmingDelete}
+        finalFocus={moreButton}
+        title={`Delete the ${name}?`}
+        description="It will no longer appear or be emailed. This cannot be undone."
+        onConfirm={() => deleteAction()}
+      />
       {message && (
         <p role="alert" className="text-sm text-destructive">
           {message}

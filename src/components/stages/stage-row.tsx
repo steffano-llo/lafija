@@ -1,6 +1,8 @@
 "use client";
 
 import { useActionState } from "react";
+import { SECONDARY_ACTION } from "@/components/actions/action-styles";
+import { ConfirmActionButton } from "@/components/actions/confirm-dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { NativeSelect } from "@/components/ui/native-select";
@@ -63,7 +65,7 @@ export function StageRow({
               </option>
             ))}
           </NativeSelect>
-          <Button type="submit" variant="outline" size="sm" disabled={editPending} aria-label={`Save ${stage.name}`}>
+          <Button type="submit" {...SECONDARY_ACTION} disabled={editPending} aria-label={`Save ${stage.name}`}>
             {editPending ? "Saving…" : "Save"}
           </Button>
           {stage.archived && <span className="text-xs text-muted-foreground">Archived</span>}
@@ -78,8 +80,7 @@ export function StageRow({
             type="submit"
             name="intent"
             value="up"
-            variant="ghost"
-            size="sm"
+            {...SECONDARY_ACTION}
             disabled={rowPending || isFirst}
             aria-label={`Move ${stage.name} up`}
           >
@@ -89,8 +90,7 @@ export function StageRow({
             type="submit"
             name="intent"
             value="down"
-            variant="ghost"
-            size="sm"
+            {...SECONDARY_ACTION}
             disabled={rowPending || isLast}
             aria-label={`Move ${stage.name} down`}
           >
@@ -100,28 +100,24 @@ export function StageRow({
             type="submit"
             name="intent"
             value={stage.archived ? "unarchive" : "archive"}
-            variant="ghost"
-            size="sm"
+            {...SECONDARY_ACTION}
             disabled={rowPending}
             aria-label={`${stage.archived ? "Unarchive" : "Archive"} ${stage.name}`}
           >
             {stage.archived ? "Unarchive" : "Archive"}
           </Button>
-          <Button
-            type="submit"
-            name="intent"
-            value="delete"
-            variant="ghost"
-            size="sm"
-            disabled={rowPending}
-            aria-label={`Delete ${stage.name}`}
-            onClick={(event) => {
-              if (!window.confirm(`Delete the stage "${stage.name}"?`)) event.preventDefault();
-            }}
-          >
-            Delete
-          </Button>
         </form>
+        <ConfirmActionButton
+          ariaLabel={`Delete ${stage.name}`}
+          disabled={rowPending}
+          title={`Delete the stage “${stage.name}”?`}
+          description="The stage is removed from your board. A stage that applications use or have been in cannot be deleted; archive it instead. This cannot be undone."
+          onConfirm={() => {
+            const formData = new FormData();
+            formData.set("intent", "delete");
+            rowFormAction(formData);
+          }}
+        />
       </div>
       {message && (
         <p role="alert" className="text-sm text-destructive">
