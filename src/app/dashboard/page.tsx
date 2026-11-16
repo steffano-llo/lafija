@@ -1,6 +1,8 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 import { Suspense } from "react";
 import { SignOutButton } from "@/components/auth/sign-out-button";
+import { buttonVariants } from "@/components/ui/button";
 import { requireUser } from "@/lib/session";
 
 export const metadata: Metadata = { title: "Dashboard · laFija" };
@@ -21,6 +23,11 @@ export default function DashboardPage() {
       <Suspense fallback={<p className="text-muted-foreground">Loading…</p>}>
         <SignedInAs />
       </Suspense>
+      <nav aria-label="Sections">
+        <Link href="/dashboard/applications" className={buttonVariants()}>
+          View applications
+        </Link>
+      </nav>
     </main>
   );
 }

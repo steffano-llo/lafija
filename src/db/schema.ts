@@ -1,4 +1,5 @@
-import { boolean, index, pgTable, text, timestamp } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
+import { boolean, date, foreignKey, index, pgTable, text, timestamp, unique, uniqueIndex } from "drizzle-orm/pg-core";
 
 // Better Auth core tables (better-auth 1.7). Model keys must stay
 // `user`, `session`, `account` and `verification` for the Drizzle adapter.
@@ -63,4 +64,65 @@ export const verification = pgTable(
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [index("verification_identifier_idx").on(table.identifier)],
+);
+
+// laFija domain tables. Every row belongs to one user and is deleted with that user.
+
+export const company = pgTable(
+  "company",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => crypto.randomUUID()),
+    userId: text("user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    website: text("website"),
+    notes: text("notes"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow()
+      .$onUpdate(() => new Date()),
+  },
+  (table) => [
+    // One company per name and user, ignoring case: "Acme" and "ACME" are the same company.
+    uniqueIndex("company_user_id_name_idx").on(table.userId, sql`lower(${table.name})`),
+    // Target of the composite foreign key below.
+    unique("company_id_user_id_unique").on(table.id, table.userId),
+  ],
+);
+
+export const application = pgTable(
+  "application",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => crypto.randomUUID()),
+    userId: text("user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    companyId: text("company_id").notNull(),
+    role: text("role").notNull(),
+    url: text("url"),
+    source: text("source"),
+    salaryRange: text("salary_range"),
+    appliedAt: date("applied_at", { mode: "string" }),
+    archived: boolean("archived").notNull().default(false),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow()
+      .$onUpdate(() => new Date()),
+  },
+  (table) => [
+    index("application_user_id_idx").on(table.userId),
+    // The company must belong to the same user as the application.
+    foreignKey({
+      name: "application_company_id_user_id_fk",
+      columns: [table.companyId, table.userId],
+      foreignColumns: [company.id, company.userId],
+    }),
+  ],
 );

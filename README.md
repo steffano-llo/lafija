@@ -50,6 +50,19 @@ Then create the tables: `npm run db:migrate`.
 - Google sign-in never attaches to an existing account with the same email (Better Auth `account.accountLinking.disableImplicitLinking`). Better Auth redirects to `/sign-in?error=account_not_linked` and the page asks the user to sign in with email and password. Other OAuth errors land on `/sign-in` with a generic message (`onAPIError.errorURL`).
 - Google access and refresh tokens are encrypted with `BETTER_AUTH_SECRET` before they are stored (`account.encryptOAuthTokens`). The Google id token is not stored, because Better Auth would keep it in plaintext and the app does not use it. Changing `BETTER_AUTH_SECRET` makes stored Google tokens unreadable; users only need to sign in with Google again.
 
+## Data model
+
+Better Auth owns `user`, `session`, `account` and `verification`. App tables (all deleted with their user):
+
+| Table | Columns | Rules |
+| --- | --- | --- |
+| `company` | `id`, `user_id`, `name`, `website`, `notes`, `created_at`, `updated_at` | Unique per user on `lower(name)`: "Acme" and "ACME" are one company. |
+| `application` | `id`, `user_id`, `company_id`, `role`, `url`, `source`, `salary_range`, `applied_at` (date), `archived`, `created_at`, `updated_at` | Indexed by `user_id`. `(company_id, user_id)` references `company(id, user_id)`, so an application can only point to its owner's company. |
+
+Data access lives in `src/server/` as plain functions taking `(db, userId, ...)`; every query filters by `userId`. Server Actions call `requireUser()` first and pass its `id`. Input is validated with the Zod schemas in `src/lib/validation/` (role and company required, `url` must be http(s), `applied_at` a real date not in the future in any time zone). Creating or editing an application takes a company name and finds or creates that user's company with `insert ... on conflict do nothing` followed by a select, because the Neon HTTP driver has no interactive transactions.
+
+Pages: `/dashboard/applications` (active list, `?view=archived` for archived), `/dashboard/applications/new`, `/dashboard/applications/<id>/edit`.
+
 ## Scripts
 
 | Command | What it does |
