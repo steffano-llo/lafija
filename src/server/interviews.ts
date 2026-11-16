@@ -1,8 +1,10 @@
 import "server-only";
 
-import { and, asc, eq } from "drizzle-orm";
+import { and, asc, eq, sql } from "drizzle-orm";
 import { application, interview } from "@/db/schema";
 import {
+  INTERVIEW_PENDING_PAST_MESSAGE,
+  isPastPending,
   parseInterviewInput,
   parseInterviewOutcome,
   type InterviewFieldErrors,
@@ -23,16 +25,26 @@ export type Interview = {
   updatedAt: Date;
 };
 
+/** An interview as listed: past interviews still pending need their outcome recorded. */
+export type ListedInterview = Interview & { needsOutcome: boolean };
+
 export type InterviewResult =
   | { ok: true; interview: Interview }
   | { ok: false; reason: "invalid"; fieldErrors: InterviewFieldErrors }
   | { ok: false; reason: "not_found" };
 
+/** `pending_past`: an interview whose date has passed cannot go back to pending. */
 export type InterviewOutcomeResult =
   | { ok: true; interview: Interview }
-  | { ok: false; reason: "invalid" | "not_found" };
+  | { ok: false; reason: "invalid" | "not_found" | "pending_past" };
 
 const notFound = { ok: false, reason: "not_found" } as const;
+
+const pendingPast = {
+  ok: false,
+  reason: "invalid",
+  fieldErrors: { outcome: [INTERVIEW_PENDING_PAST_MESSAGE] },
+} as const satisfies InterviewResult;
 
 const interviewColumns = {
   id: interview.id,
@@ -65,17 +77,23 @@ async function ownsInterview(db: Db, userId: string, id: string): Promise<boolea
   return Boolean(row);
 }
 
-/** Interviews of the user's application by scheduled time; null when the application is not theirs. */
-export async function listInterviews(db: Db, userId: string, applicationId: string): Promise<Interview[] | null> {
+/**
+ * Interviews of the user's application by scheduled time; null when the application is not theirs.
+ * `needsOutcome` marks past interviews still pending (stored before the rule below existed).
+ */
+export async function listInterviews(db: Db, userId: string, applicationId: string): Promise<ListedInterview[] | null> {
   if (!isId(applicationId) || !(await ownsApplication(db, userId, applicationId))) return null;
   return db
-    .select(interviewColumns)
+    .select({
+      ...interviewColumns,
+      needsOutcome: sql<boolean>`(${interview.outcome} = 'pending' and ${interview.scheduledAt} < now())`,
+    })
     .from(interview)
     .where(and(eq(interview.userId, userId), eq(interview.applicationId, applicationId)))
     .orderBy(asc(interview.scheduledAt), asc(interview.createdAt), asc(interview.id));
 }
 
-/** Adds an interview to the user's application. */
+/** Adds an interview to the user's application. A past interview needs an outcome other than pending. */
 export async function createInterview(
   db: Db,
   userId: string,
@@ -90,6 +108,7 @@ export async function createInterview(
       : notFound;
   }
   if (!(await ownsApplication(db, userId, applicationId))) return notFound;
+  if (isPastPending(parsed.data)) return pendingPast;
   // The composite foreign key (application_id, user_id) also refuses another user's application.
   const [row] = await db
     .insert(interview)
@@ -98,7 +117,7 @@ export async function createInterview(
   return row ? { ok: true, interview: row } : notFound;
 }
 
-/** Replaces the date, type, outcome and notes of the user's interview. */
+/** Replaces the date, type, outcome and notes of the user's interview; past ones cannot stay pending. */
 export async function updateInterview(db: Db, userId: string, id: string, input: unknown): Promise<InterviewResult> {
   if (!isId(id)) return notFound;
   const parsed = parseInterviewInput(input);
@@ -107,6 +126,7 @@ export async function updateInterview(db: Db, userId: string, id: string, input:
       ? { ok: false, reason: "invalid", fieldErrors: parsed.fieldErrors }
       : notFound;
   }
+  if (isPastPending(parsed.data)) return (await ownsInterview(db, userId, id)) ? pendingPast : notFound;
   const [row] = await db
     .update(interview)
     .set(parsed.data)
@@ -115,7 +135,10 @@ export async function updateInterview(db: Db, userId: string, id: string, input:
   return row ? { ok: true, interview: row } : notFound;
 }
 
-/** Sets only the outcome of the user's interview. */
+/**
+ * Sets only the outcome of the user's interview. Pending is refused (`pending_past`) once the
+ * interview's date has passed; the check is part of the update.
+ */
 export async function setInterviewOutcome(
   db: Db,
   userId: string,
@@ -128,9 +151,16 @@ export async function setInterviewOutcome(
   const [row] = await db
     .update(interview)
     .set({ outcome: parsed })
-    .where(and(eq(interview.userId, userId), eq(interview.id, id)))
+    .where(
+      and(
+        eq(interview.userId, userId),
+        eq(interview.id, id),
+        sql`not (${parsed} = 'pending' and ${interview.scheduledAt} < now())`,
+      ),
+    )
     .returning(interviewColumns);
-  return row ? { ok: true, interview: row } : notFound;
+  if (row) return { ok: true, interview: row };
+  return (await ownsInterview(db, userId, id)) ? { ok: false, reason: "pending_past" } : notFound;
 }
 
 export async function deleteInterview(db: Db, userId: string, id: string): Promise<{ ok: true } | typeof notFound> {

@@ -6,6 +6,7 @@ import { ApplicationForm } from "@/components/applications/application-form";
 import { getDb } from "@/db";
 import { requireUser } from "@/lib/session";
 import { listCompanies } from "@/server/applications";
+import { getUserSettings } from "@/server/settings";
 import { listStages } from "@/server/stages";
 import { createApplicationAction } from "../actions";
 
@@ -14,13 +15,18 @@ export const metadata: Metadata = { title: "New application · laFija" };
 async function NewApplicationForm() {
   const user = await requireUser();
   const db = getDb();
-  const [companies, stages] = await Promise.all([listCompanies(db, user.id), listStages(db, user.id)]);
+  const [companies, stages, settings] = await Promise.all([
+    listCompanies(db, user.id),
+    listStages(db, user.id),
+    getUserSettings(db, user.id),
+  ]);
   const activeStages = stages.filter((stage) => !stage.archived);
   return (
     <ApplicationForm
       action={createApplicationAction}
       // New applications start in the first active stage unless the user picks another.
-      initialValues={{ stageId: activeStages[0]?.id }}
+      // The salary currency starts as the user's default (Settings).
+      initialValues={{ stageId: activeStages[0]?.id, salaryCurrency: settings.defaultCurrency }}
       companies={companies.map((company) => company.name)}
       stages={activeStages.map(({ id, name }) => ({ id, name }))}
       submitLabel="Save application"

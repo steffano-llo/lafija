@@ -17,6 +17,7 @@ import {
 // Relative import: drizzle-kit loads this file without the `@/` path alias.
 import { INTERVIEW_OUTCOMES, INTERVIEW_TYPES } from "../lib/validation/interview";
 import { FOLLOW_UP_DAYS_DEFAULT, FOLLOW_UP_DAYS_MAX, FOLLOW_UP_DAYS_MIN, REMINDER_KINDS } from "../lib/validation/reminder";
+import { DEFAULT_CURRENCY } from "../lib/validation/settings";
 import { STAGE_CATEGORIES } from "../lib/validation/stage";
 
 // Better Auth core tables (better-auth 1.7). Model keys must stay
@@ -157,6 +158,8 @@ export const application = pgTable(
     url: text("url"),
     source: text("source"),
     salaryRange: text("salary_range"),
+    // ISO 4217 code of the salary; set exactly when there is a salary.
+    salaryCurrency: text("salary_currency"),
     appliedAt: date("applied_at", { mode: "string" }),
     // Free notes shown and edited on the detail page.
     notes: text("notes"),
@@ -189,6 +192,11 @@ export const application = pgTable(
       foreignColumns: [stage.id, stage.userId],
     }),
     index("application_stage_id_idx").on(table.stageId),
+    check("application_salary_currency_check", sql`${table.salaryCurrency} is null or ${table.salaryCurrency} ~ '^[A-Z]{3}$'`),
+    check(
+      "application_salary_currency_required_check",
+      sql`(${table.salaryRange} is null) = (${table.salaryCurrency} is null)`,
+    ),
   ],
 );
 
@@ -368,6 +376,8 @@ export const reminder = pgTable(
     // The transition a follow-up reminder was created for; null for manual reminders.
     transitionId: text("transition_id"),
     sentAt: timestamp("sent_at", { withTimezone: true }),
+    // Set when the user edits the due time or snoozes: a time zone change then leaves it alone.
+    dueCustomized: boolean("due_customized").notNull().default(false),
     doneAt: timestamp("done_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true })
@@ -412,6 +422,10 @@ export const userSettings = pgTable(
       .references(() => user.id, { onDelete: "cascade" }),
     // Days after a move into an active stage before the follow-up is due; null turns them off.
     followUpDays: integer("follow_up_days").default(FOLLOW_UP_DAYS_DEFAULT),
+    // IANA zone detected from the browser or chosen in Settings; null = not detected yet (UTC).
+    timeZone: text("time_zone"),
+    // ISO 4217 code preselected for new salaries.
+    defaultCurrency: text("default_currency").notNull().default(DEFAULT_CURRENCY),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true })
       .notNull()
@@ -423,5 +437,6 @@ export const userSettings = pgTable(
       "user_settings_follow_up_days_check",
       sql`${table.followUpDays} is null or ${table.followUpDays} between ${sql.raw(String(FOLLOW_UP_DAYS_MIN))} and ${sql.raw(String(FOLLOW_UP_DAYS_MAX))}`,
     ),
+    check("user_settings_default_currency_check", sql`${table.defaultCurrency} ~ '^[A-Z]{3}$'`),
   ],
 );

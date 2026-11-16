@@ -76,7 +76,8 @@ async function newApplication(userId: string, companyName = "Acme", role = "Engi
 
 async function newInterview(userId: string, applicationId: string, input: Record<string, unknown> = {}) {
   const result = await createInterview(db, userId, applicationId, {
-    scheduledAt: "2025-03-10T15:00:00.000Z",
+    // Future: a past interview cannot be pending.
+    scheduledAt: "2035-03-10T15:00:00.000Z",
     type: "video",
     ...input,
   });
@@ -98,7 +99,7 @@ describe("interviews", () => {
     const app = await newApplication(userId);
 
     const created = await createInterview(db, userId, app.id, {
-      scheduledAt: "2025-03-12T09:30:00-03:00",
+      scheduledAt: "2035-03-12T09:30:00-03:00",
       type: "technical",
       notes: "  Live coding  ",
     });
@@ -106,13 +107,13 @@ describe("interviews", () => {
       ok: true,
       interview: expect.objectContaining({
         applicationId: app.id,
-        scheduledAt: new Date("2025-03-12T12:30:00.000Z"),
+        scheduledAt: new Date("2035-03-12T12:30:00.000Z"),
         type: "technical",
         notes: "Live coding",
         outcome: "pending",
       }),
     });
-    const earlier = await newInterview(userId, app.id, { scheduledAt: "2025-03-01T10:00:00Z", type: "phone" });
+    const earlier = await newInterview(userId, app.id, { scheduledAt: "2035-03-01T10:00:00Z", type: "phone" });
 
     expect((await listInterviews(db, userId, app.id))?.map((i) => i.type)).toEqual(["phone", "technical"]);
 

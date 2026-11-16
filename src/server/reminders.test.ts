@@ -12,6 +12,8 @@ import {
   userSettings,
 } from "@/db/schema";
 import { createTestDb } from "@/test/db";
+// S12: follow-ups are due 09:00 in the user's zone (UTC while none is stored) on the local date plus N days.
+import { followUpDue } from "./test-zones";
 
 vi.mock("server-only", () => ({}));
 
@@ -102,7 +104,7 @@ async function newReminder(userId: string, applicationId: string, input: Record<
 }
 
 describe("automatic follow-ups", () => {
-  it("creates one open follow-up, due 7 days after the creation transition, when created into an active stage", async () => {
+  it("creates one open follow-up, due 09:00 UTC 7 days after the creation transition's date, when created into an active stage", async () => {
     const userId = await newUser();
     const app = await newApplication(userId, { companyName: "Globex", role: "Data Engineer" });
 
@@ -112,7 +114,7 @@ describe("automatic follow-ups", () => {
         applicationId: app.id,
         kind: "follow_up",
         message: "Follow up with Globex about Data Engineer",
-        dueAt: new Date(transition.at.getTime() + 7 * DAY),
+        dueAt: followUpDue(transition.at, 7, "UTC"),
         transitionId: transition.id,
         sentAt: null,
         doneAt: null,
@@ -139,7 +141,7 @@ describe("automatic follow-ups", () => {
     expect(open).toEqual(
       expect.objectContaining({
         transitionId: latest.id,
-        dueAt: new Date(latest.at.getTime() + 7 * DAY),
+        dueAt: followUpDue(latest.at, 7, "UTC"),
         doneAt: null,
         message: "Follow up with Acme about Engineer",
       }),
@@ -172,7 +174,7 @@ describe("automatic follow-ups", () => {
     await moveApplication(db, userId, off.id, { stageId: screening.id, index: 0 });
     const [transition] = (await transitionsOf(userId, off.id)).slice(-1);
     expect(await followUps(userId, off.id)).toEqual([
-      expect.objectContaining({ dueAt: new Date(transition.at.getTime() + 3 * DAY), doneAt: null }),
+      expect.objectContaining({ dueAt: followUpDue(transition.at, 3, "UTC"), doneAt: null }),
     ]);
   });
 
@@ -224,7 +226,7 @@ describe("automatic follow-ups", () => {
     expect(after.find((r) => r.id !== old.id)).toEqual(
       expect.objectContaining({
         transitionId: latest.id,
-        dueAt: new Date(latest.at.getTime() + 7 * DAY),
+        dueAt: followUpDue(latest.at, 7, "UTC"),
         doneAt: null,
         message: "Follow up with Initech about Lead",
       }),

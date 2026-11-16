@@ -53,6 +53,7 @@ describe("createApplication", () => {
       url: "https://acme.com/jobs/1",
       source: "LinkedIn",
       salaryRange: "50k-60k",
+      salaryCurrency: "USD",
       appliedAt: "2024-05-01",
     });
 
@@ -64,6 +65,7 @@ describe("createApplication", () => {
         url: "https://acme.com/jobs/1",
         source: "LinkedIn",
         salaryRange: "50k-60k",
+        salaryCurrency: "USD",
         appliedAt: "2024-05-01",
         archived: false,
       }),
@@ -143,6 +145,7 @@ describe("updateApplication", () => {
       url: "https://globex.com/careers",
       source: "",
       salaryRange: "70k",
+      salaryCurrency: "EUR",
       appliedAt: "2024-04-02",
     });
 
@@ -154,6 +157,7 @@ describe("updateApplication", () => {
       url: "https://globex.com/careers",
       source: null,
       salaryRange: "70k",
+      salaryCurrency: "EUR",
       appliedAt: "2024-04-02",
       updatedAt: expect.any(Date),
     };

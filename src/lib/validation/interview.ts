@@ -74,3 +74,25 @@ export function parseInterviewOutcome(value: unknown): InterviewOutcome | null {
   const result = outcome.safeParse(value);
   return result.success ? result.data : null;
 }
+
+/** Refusal for an interview whose date has passed but whose outcome is still pending. */
+export const INTERVIEW_PENDING_PAST_MESSAGE = "This interview already happened. Record its outcome instead of Pending.";
+
+/** Non-blocking warning under the date field. */
+export const INTERVIEW_OLD_DATE_WARNING = "This date is more than a year ago.";
+
+/** Hint on the detail page for past interviews still pending. */
+export const INTERVIEW_RECORD_OUTCOME_HINT = "Record the outcome";
+
+/** Pending is only for interviews that have not happened yet. */
+export function isPastPending(input: { scheduledAt: Date; outcome: InterviewOutcome }, now: Date = new Date()): boolean {
+  return input.outcome === "pending" && input.scheduledAt.getTime() < now.getTime();
+}
+
+/** True when the date is more than one calendar year before `now` (false for an invalid date). */
+export function isMoreThanAYearAgo(date: Date, now: Date = new Date()): boolean {
+  if (Number.isNaN(date.getTime())) return false;
+  const yearAgo = new Date(now);
+  yearAgo.setFullYear(yearAgo.getFullYear() - 1);
+  return date.getTime() < yearAgo.getTime();
+}

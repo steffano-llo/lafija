@@ -1,4 +1,5 @@
 import type { ApplicationField, FieldErrors } from "@/lib/validation/application";
+import { INTERVIEW_PENDING_PAST_MESSAGE } from "@/lib/validation/interview";
 
 /** Raw form values, echoed back so a rejected submission keeps what the user typed. */
 export type ApplicationFormValues = Partial<Record<ApplicationField, string>>;
@@ -20,7 +21,16 @@ export const ARCHIVE_REFUSAL_MESSAGES = {
     "Its stage is archived. Unarchive the stage, or edit the application into another stage, then unarchive it.",
 } as const;
 
-const fields: ApplicationField[] = ["companyName", "role", "stageId", "url", "source", "salaryRange", "appliedAt"];
+const fields: ApplicationField[] = [
+  "companyName",
+  "role",
+  "stageId",
+  "url",
+  "source",
+  "salaryRange",
+  "salaryCurrency",
+  "appliedAt",
+];
 
 /** Reads only the known fields, ignoring React's `$ACTION_` entries and anything else posted. */
 export function readApplicationForm(formData: FormData): ApplicationFormValues {
@@ -58,6 +68,7 @@ export const DETAIL_MESSAGES = {
   contact_not_found: "This contact no longer exists.",
   other_company: "This contact belongs to another company.",
   invalid_outcome: "Choose a valid outcome.",
+  pending_past: INTERVIEW_PENDING_PAST_MESSAGE,
 } as const;
 
 /** Reads only the named fields, ignoring React's `$ACTION_` entries and anything else posted. */

@@ -46,8 +46,9 @@ export function FollowUpSettingsForm({ followUpDays }: { followUpDays: number | 
         )}
       </div>
       <p id="follow-up-days-help" className="text-sm text-muted-foreground">
-        When an application moves into an active stage, a follow-up reminder is created for that many days later.
-        Any later move closes it. Changing this does not change existing reminders.
+        When an application moves into an active stage, a follow-up reminder is created, due at 9:00 a.m. in your
+        time zone that many days after the move. Any later move closes it. Changing this does not change existing
+        reminders.
       </p>
       {state.error && (
         <p id="follow-up-days-error" role="alert" className="text-sm text-destructive">

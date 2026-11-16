@@ -11,9 +11,11 @@ import {
   type ReminderFieldErrors,
   type ReminderKind,
 } from "@/lib/validation/reminder";
+import { FALLBACK_TIME_ZONE } from "@/lib/validation/settings";
 import type { Db } from "./applications";
 import { runAtomic } from "./atomic";
 import { isId } from "./ids";
+import { followUpDueSql } from "./time-zone-sql";
 
 export type Reminder = {
   id: string;
@@ -24,6 +26,8 @@ export type Reminder = {
   /** The transition an automatic follow-up was created for; null for manual reminders. */
   transitionId: string | null;
   sentAt: Date | null;
+  /** The user changed the due time (edit or snooze): time zone changes leave it alone. */
+  dueCustomized: boolean;
   doneAt: Date | null;
   createdAt: Date;
   updatedAt: Date;
@@ -63,6 +67,7 @@ const reminderColumns = {
   message: reminder.message,
   transitionId: reminder.transitionId,
   sentAt: reminder.sentAt,
+  dueCustomized: reminder.dueCustomized,
   doneAt: reminder.doneAt,
   createdAt: reminder.createdAt,
   updatedAt: reminder.updatedAt,
@@ -94,8 +99,9 @@ const currentTransitionSql = (a: SQL): SQL => sql`(
  * With that transition, the wanted state is one open follow-up for it when the application is not
  * archived, its stage's category is `active` and the user's follow-up days are not off (the setting
  * only gates creation, so changing it applies to later transitions only). The statement closes
- * every other open follow-up of the application and inserts the wanted one, due that many days
- * after the transition, unless a follow-up of that transition already exists, open or done: one
+ * every other open follow-up of the application and inserts the wanted one, due at 09:00 in the
+ * user's time zone (UTC while none is stored) on the transition's local date plus that many days
+ * (`followUpDueSql`), unless a follow-up of that transition already exists, open or done: one
  * the user marked done stays done. Idempotent. Under READ COMMITTED it reads a snapshot taken after
  * the row lock, so it sees whatever a concurrent writer of the same application committed first.
  */
@@ -113,14 +119,15 @@ export function syncFollowUpSql(userId: string, applicationId: string): SQL {
     ),
     "wanted" as (
       select fr."application_id", fr."user_id", fr."id" as "transition_id",
-        fr."at" + make_interval(days => f."days") as "due_at",
+        ${followUpDueSql(sql`fr."at"`, sql`f."days"`, sql`f."tz"`)} as "due_at",
         left('Follow up with ' || co."name" || ' about ' || fr."role", 500) as "message"
       from "fresh" fr
       join "stage" s on s."id" = fr."stage_id" and s."user_id" = fr."user_id" and s."category" = 'active'
       join "company" co on co."id" = fr."company_id" and co."user_id" = fr."user_id"
       cross join lateral (
         -- No settings row means the default; a row with null means follow-ups are off.
-        select case when us."user_id" is null then ${FOLLOW_UP_DAYS_DEFAULT}::int else us."follow_up_days" end as "days"
+        select case when us."user_id" is null then ${FOLLOW_UP_DAYS_DEFAULT}::int else us."follow_up_days" end as "days",
+          coalesce(us."time_zone", ${FALLBACK_TIME_ZONE}) as "tz"
         from (select 1) as "one" left join "user_settings" us on us."user_id" = fr."user_id"
       ) f
       where not fr."archived" and f."days" is not null
@@ -308,7 +315,8 @@ export async function createReminder(
 /**
  * Replaces the due time and message of the user's reminder; a new due time is emailed again. The
  * form submits whole minutes, so a due time in the same UTC minute as the stored one counts as
- * unchanged: the stored value and `sent_at` stay (editing only the message is not a new due time).
+ * unchanged: the stored value, `sent_at` and `due_customized` stay (editing only the message is not
+ * a new due time). A new due time marks it customized, so a time zone change never moves it.
  */
 export async function updateReminder(db: Db, userId: string, id: string, input: unknown): Promise<ReminderResult> {
   if (!isId(id)) return notFound;
@@ -327,6 +335,7 @@ export async function updateReminder(db: Db, userId: string, id: string, input: 
       dueAt: sql`case when ${sameMinute} then ${reminder.dueAt} else ${dueAt.toISOString()}::timestamptz end`,
       message,
       sentAt: sql`case when ${sameMinute} then ${reminder.sentAt} else null end`,
+      dueCustomized: sql`case when ${sameMinute} then ${reminder.dueCustomized} else true end`,
     })
     .where(and(eq(reminder.userId, userId), eq(reminder.id, id)))
     .returning({ id: reminder.id });
@@ -385,14 +394,17 @@ export async function setReminderDone(db: Db, userId: string, id: string, done: 
   return (await getReminder(db, userId, id)) ? { ok: false, reason: "closed" } : notFound;
 }
 
-/** Moves the due time of the user's open reminder to 1, 3 or 7 days from now; it is emailed again. */
+/**
+ * Moves the due time of the user's open reminder to 1, 3 or 7 days from now (not from its due
+ * time); it is emailed again and counts as customized.
+ */
 export async function snoozeReminder(db: Db, userId: string, id: string, days: unknown): Promise<ReminderChangeResult> {
   if (!isId(id)) return notFound;
   const parsed = parseSnoozeDays(days);
   if (parsed === null) return (await getReminder(db, userId, id)) ? { ok: false, reason: "invalid" } : notFound;
   const [row] = await db
     .update(reminder)
-    .set({ dueAt: sql`now() + make_interval(days => ${parsed}::int)`, sentAt: null })
+    .set({ dueAt: sql`now() + make_interval(days => ${parsed}::int)`, sentAt: null, dueCustomized: true })
     .where(and(eq(reminder.userId, userId), eq(reminder.id, id), isNull(reminder.doneAt)))
     .returning({ id: reminder.id });
   if (row) return loaded(db, userId, row.id);

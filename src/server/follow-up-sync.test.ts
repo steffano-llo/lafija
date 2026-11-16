@@ -2,6 +2,8 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { and, eq, sql } from "drizzle-orm";
 import { application, reminder, stageTransition, user } from "@/db/schema";
 import { createTestDb } from "@/test/db";
+// S12: follow-ups are due 09:00 in the user's zone (UTC while none is stored) on the local date plus N days.
+import { followUpDue } from "./test-zones";
 
 vi.mock("server-only", () => ({}));
 
@@ -24,8 +26,6 @@ beforeAll(async () => {
 afterAll(async () => {
   await close();
 });
-
-const DAY = 24 * 60 * 60 * 1000;
 
 async function newUser() {
   counter += 1;
@@ -109,7 +109,7 @@ describe("syncFollowUp: one statement derives the follow-up state after this tra
     expect(after.filter((r) => r.doneAt === null)).toEqual([
       expect.objectContaining({
         transitionId: t2.id,
-        dueAt: new Date(t2.at.getTime() + 7 * DAY),
+        dueAt: followUpDue(t2.at, 7, "UTC"),
         message: "Follow up with Acme about Engineer",
         sentAt: null,
       }),
@@ -177,7 +177,7 @@ describe("syncFollowUp: one statement derives the follow-up state after this tra
 
     const latest = await latestTransition(userId, app.id);
     expect(await followUps(userId, app.id)).toEqual([
-      expect.objectContaining({ transitionId: latest.id, dueAt: new Date(latest.at.getTime() + 4 * DAY), doneAt: null }),
+      expect.objectContaining({ transitionId: latest.id, dueAt: followUpDue(latest.at, 4, "UTC"), doneAt: null }),
     ]);
   });
 

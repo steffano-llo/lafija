@@ -39,6 +39,9 @@ export default function DashboardPage() {
           <Link href="/dashboard/reminders" className={buttonVariants({ variant: "outline" })}>
             Reminders
           </Link>
+          <Link href="/dashboard/settings" className={buttonVariants({ variant: "outline" })}>
+            Settings
+          </Link>
         </nav>
       </main>
     </>

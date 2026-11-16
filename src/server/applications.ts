@@ -11,6 +11,7 @@ import { isId } from "./ids";
 import { runAtomic } from "./atomic";
 import { closeArchivedFollowUpSql, syncFollowUpSql } from "./reminders";
 import { ensureDefaultStages } from "./stages";
+import { isAfterFirstStageSql, userLocalDateSql } from "./time-zone-sql";
 
 /**
  * Any Drizzle Postgres database with the app schema: Neon HTTP in the app, PGlite in tests.
@@ -32,6 +33,7 @@ const applicationColumns = {
   url: application.url,
   source: application.source,
   salaryRange: application.salaryRange,
+  salaryCurrency: application.salaryCurrency,
   appliedAt: application.appliedAt,
   notes: application.notes,
   archived: application.archived,
@@ -51,6 +53,8 @@ export type Application = {
   url: string | null;
   source: string | null;
   salaryRange: string | null;
+  /** ISO 4217 code; set exactly when `salaryRange` is. */
+  salaryCurrency: string | null;
   appliedAt: string | null;
   notes: string | null;
   archived: boolean;
@@ -169,7 +173,8 @@ async function loaded(db: Db, userId: string, id: string): Promise<ApplicationRe
 /**
  * Validates the input, finds or creates the company by name and stores a new application at the
  * bottom of its stage's column. The insert and its first transition (null → stage) are one
- * statement; a second one in the same transaction creates, in an active stage, its automatic
+ * statement; created after the first stage without an applied date, the application gets today's
+ * date in the user's time zone. A second one in the same transaction creates, in an active stage, its automatic
  * follow-up reminder (`syncFollowUpSql`).
  */
 export async function createApplication(db: Db, userId: string, input: unknown): Promise<ApplicationResult> {
@@ -187,9 +192,13 @@ export async function createApplication(db: Db, userId: string, input: unknown):
     sql`
     with "created" as (
       insert into "application"
-        ("id", "user_id", "company_id", "stage_id", "role", "url", "source", "salary_range", "applied_at", "position")
+        ("id", "user_id", "company_id", "stage_id", "role", "url", "source", "salary_range", "salary_currency",
+          "applied_at", "position")
       values (${id}, ${userId}, ${target.id}, ${stageId}, ${fields.role}, ${fields.url}, ${fields.source},
-        ${fields.salaryRange}, ${fields.appliedAt}::date, ${position})
+        ${fields.salaryRange}, ${fields.salaryCurrency},
+        coalesce(${fields.appliedAt}::date,
+          case when ${isAfterFirstStageSql(userId, sql`${stageId}`)} then ${userLocalDateSql(userId)} end),
+        ${position})
       returning "id", "user_id", "stage_id", "created_at"
     ),
     "logged" as (
@@ -208,7 +217,8 @@ export async function createApplication(db: Db, userId: string, input: unknown):
  * Replaces the editable fields of the user's application. Ownership is checked first,
  * so a foreign or unknown id never creates a company for the caller. A missing `stageId`
  * keeps the current stage. A new stage puts the application at the bottom of that column and
- * appends a transition in the same statement as the update. A new company unlinks the contacts of
+ * appends a transition in the same statement as the update; when that stage comes after the first
+ * one and no applied date was entered, the date of the move in the user's time zone is stored. A new company unlinks the contacts of
  * the old one in that statement too. A second statement in the same transaction syncs the automatic
  * follow-up reminder like a board move does (`syncFollowUpSql`).
  */
@@ -244,7 +254,10 @@ export async function updateApplication(
         "url" = ${fields.url},
         "source" = ${fields.source},
         "salary_range" = ${fields.salaryRange},
-        "applied_at" = ${fields.appliedAt}::date,
+        "salary_currency" = ${fields.salaryCurrency},
+        "applied_at" = coalesce(${fields.appliedAt}::date,
+          case when c."stage_id" <> ${stageId} and ${isAfterFirstStageSql(userId, sql`${stageId}`)}
+            then ${userLocalDateSql(userId)} end),
         "position" = case when c."stage_id" = ${stageId} then a."position" else ${position} end,
         "updated_at" = now()
       from "current" c

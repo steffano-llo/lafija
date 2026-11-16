@@ -12,4 +12,6 @@ export type InterviewItem = {
   type: InterviewType;
   outcome: InterviewOutcome;
   notes: string | null;
+  /** Past and still pending: the page asks for the outcome. */
+  needsOutcome: boolean;
 };

@@ -88,9 +88,12 @@ export async function setInterviewOutcomeAction(
   if (!isId(applicationId) || !isId(interviewId)) return { message: DETAIL_MESSAGES.interview_not_found };
   const result = await setInterviewOutcome(getDb(), user.id, interviewId, formData.get("outcome"));
   if (!result.ok) {
-    return {
-      message: result.reason === "invalid" ? DETAIL_MESSAGES.invalid_outcome : DETAIL_MESSAGES.interview_not_found,
-    };
+    const messages = {
+      invalid: DETAIL_MESSAGES.invalid_outcome,
+      pending_past: DETAIL_MESSAGES.pending_past,
+      not_found: DETAIL_MESSAGES.interview_not_found,
+    } as const;
+    return { message: messages[result.reason] };
   }
   revalidateDetail(applicationId);
   return {};

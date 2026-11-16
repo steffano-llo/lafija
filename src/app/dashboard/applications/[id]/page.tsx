@@ -3,7 +3,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { Suspense } from "react";
 import { DashboardHeader } from "@/components/reminders/dashboard-header";
-import { formatAppliedDate } from "@/components/applications/format";
+import { formatAppliedDate, formatSalary } from "@/components/applications/format";
 import { NotesForm } from "@/components/applications/notes-form";
 import { StageHistory } from "@/components/applications/stage-history";
 import { ContactsSection } from "@/components/contacts/contacts-section";
@@ -75,7 +75,7 @@ async function ApplicationDetail({ params }: { params: Params }) {
         </Detail>
         <Detail term="Applied">{formatAppliedDate(application.appliedAt)}</Detail>
         <Detail term="Source">{application.source ?? "—"}</Detail>
-        <Detail term="Salary range">{application.salaryRange ?? "—"}</Detail>
+        <Detail term="Salary range">{formatSalary(application.salaryRange, application.salaryCurrency)}</Detail>
         <Detail term="Job posting">
           {application.url ? (
             <a href={application.url} target="_blank" rel="noopener noreferrer" className="break-all underline-offset-4 hover:underline">
@@ -93,12 +93,13 @@ async function ApplicationDetail({ params }: { params: Params }) {
 
       <InterviewsSection
         applicationId={application.id}
-        interviews={interviews.map(({ id: interviewId, scheduledAt, type, outcome, notes }) => ({
+        interviews={interviews.map(({ id: interviewId, scheduledAt, type, outcome, notes, needsOutcome }) => ({
           id: interviewId,
           scheduledAt: scheduledAt.toISOString(),
           type,
           outcome,
           notes,
+          needsOutcome,
         }))}
       />
 

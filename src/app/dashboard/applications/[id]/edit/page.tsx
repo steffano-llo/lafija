@@ -7,6 +7,7 @@ import { ApplicationForm } from "@/components/applications/application-form";
 import { getDb } from "@/db";
 import { requireUser } from "@/lib/session";
 import { getApplication, listCompanies } from "@/server/applications";
+import { getUserSettings } from "@/server/settings";
 import { listStages } from "@/server/stages";
 import { updateApplicationAction } from "../../actions";
 
@@ -18,10 +19,11 @@ async function EditApplicationForm({ params }: { params: Params }) {
   const user = await requireUser();
   const { id } = await params;
   const db = getDb();
-  const [application, companies, stages] = await Promise.all([
+  const [application, companies, stages, settings] = await Promise.all([
     getApplication(db, user.id, id),
     listCompanies(db, user.id),
     listStages(db, user.id),
+    getUserSettings(db, user.id),
   ]);
   // Unknown and foreign ids look the same: not found.
   if (!application) notFound();
@@ -40,6 +42,7 @@ async function EditApplicationForm({ params }: { params: Params }) {
         url: application.url ?? "",
         source: application.source ?? "",
         salaryRange: application.salaryRange ?? "",
+        salaryCurrency: application.salaryCurrency ?? settings.defaultCurrency,
         appliedAt: application.appliedAt ?? "",
       }}
       companies={companies.map((company) => company.name)}

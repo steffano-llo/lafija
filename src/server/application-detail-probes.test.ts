@@ -86,7 +86,7 @@ describe("foreign ids with invalid input", () => {
     const alice = await newUser();
     const bob = await newUser();
     const a = await app(alice, "Acme");
-    const i = await createInterview(db, alice, a.id, { scheduledAt: "2025-01-01T10:00:00Z", type: "phone" });
+    const i = await createInterview(db, alice, a.id, { scheduledAt: "2035-01-01T10:00:00Z", type: "phone" });
     const c = await createContact(db, alice, a.id, { name: "Ana" });
     if (!i.ok || !c.ok) throw new Error("setup failed");
     const before = await snapshot();
@@ -156,7 +156,7 @@ describe("migration 0004 on a populated database", () => {
       expect(await Promise.all(tables.map((t) => hash(`select * from "${t}" order by id`)))).toEqual(before);
       const cols = (
         await client.query<{ column_name: string }>(
-          `select column_name from information_schema.columns where table_name='application' and column_name<>'notes' order by ordinal_position`,
+          `select column_name from information_schema.columns where table_name='application' and column_name not in ('notes','salary_currency') order by ordinal_position`,
         )
       ).rows
         .map((r) => `"${r.column_name}"`)

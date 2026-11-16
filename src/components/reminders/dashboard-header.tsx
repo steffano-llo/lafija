@@ -2,7 +2,9 @@ import Link from "next/link";
 import { Suspense } from "react";
 import { getDb } from "@/db";
 import { requireUser } from "@/lib/session";
+import { TimeZoneDetector } from "@/components/settings/time-zone-detector";
 import { countDueReminders } from "@/server/reminders";
+import { getUserSettings } from "@/server/settings";
 
 function RemindersLink({ due }: { due: number | null }) {
   const label = due === null ? "Reminders" : due === 0 ? "Reminders, none due" : `Reminders, ${due} due`;
@@ -27,6 +29,13 @@ async function DueRemindersLink() {
   return <RemindersLink due={await countDueReminders(getDb(), user.id)} />;
 }
 
+/** Mounts the browser time zone detector only while the user has no stored zone. */
+async function TimeZoneCheck() {
+  const user = await requireUser();
+  const { timeZone } = await getUserSettings(getDb(), user.id);
+  return timeZone === null ? <TimeZoneDetector /> : null;
+}
+
 /**
  * Bar at the top of every dashboard page with the number of due reminders. Rendered by each page,
  * not a layout, so it is fresh on every navigation (layouts are kept across navigations).
@@ -40,6 +49,9 @@ export function DashboardHeader() {
       {/* The session read is request data: the count streams in behind this boundary. */}
       <Suspense fallback={<RemindersLink due={null} />}>
         <DueRemindersLink />
+      </Suspense>
+      <Suspense fallback={null}>
+        <TimeZoneCheck />
       </Suspense>
     </header>
   );

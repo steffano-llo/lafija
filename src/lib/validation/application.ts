@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { CURRENCY_INVALID_MESSAGE, isCurrencyCode } from "./settings";
 
 export const APPLICATION_LIMITS = {
   companyName: 120,
@@ -55,7 +56,9 @@ export function optionalText(schema: z.ZodType<string>) {
   );
 }
 
-export const applicationInputSchema = z.object({
+export const SALARY_CURRENCY_REQUIRED_MESSAGE = "Choose the currency of the salary.";
+
+const applicationFieldsSchema = z.object({
   companyName: requiredText("Company", APPLICATION_LIMITS.companyName),
   role: requiredText("Role", APPLICATION_LIMITS.role),
   url: optionalText(
@@ -77,6 +80,8 @@ export const applicationInputSchema = z.object({
         `Salary range must be at most ${APPLICATION_LIMITS.salaryRange} characters.`,
       ),
   ),
+  // ISO 4217 code; required with a salary (checked below) and dropped without one.
+  salaryCurrency: optionalText(z.string({ error: CURRENCY_INVALID_MESSAGE }).refine(isCurrencyCode, CURRENCY_INVALID_MESSAGE)),
   appliedAt: optionalText(
     z
       .string({ error: "Enter a valid date." })
@@ -89,6 +94,17 @@ export const applicationInputSchema = z.object({
     z.string({ error: "Choose a valid stage." }).trim().max(64, "Choose a valid stage.").optional(),
   ),
 });
+
+export const applicationInputSchema = applicationFieldsSchema
+  .superRefine((data, ctx) => {
+    // A salary over the length limit already has its own error.
+    const salary = data.salaryRange;
+    if (typeof salary === "string" && salary.length <= APPLICATION_LIMITS.salaryRange && data.salaryCurrency === null) {
+      ctx.addIssue({ code: "custom", path: ["salaryCurrency"], message: SALARY_CURRENCY_REQUIRED_MESSAGE });
+    }
+  })
+  // The form always posts the preselected currency; without a salary there is nothing to qualify.
+  .transform((data) => (data.salaryRange === null ? { ...data, salaryCurrency: null } : data));
 
 export type ApplicationInput = z.output<typeof applicationInputSchema>;
 export type ApplicationField = keyof ApplicationInput;

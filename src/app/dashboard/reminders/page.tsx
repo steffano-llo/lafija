@@ -23,6 +23,13 @@ async function Reminders() {
           Automatic follow-ups
         </h2>
         <FollowUpSettingsForm followUpDays={followUpDays} />
+        <p className="text-sm text-muted-foreground">
+          Time zone and default currency are in{" "}
+          <Link href="/dashboard/settings" className="underline underline-offset-4">
+            Settings
+          </Link>
+          .
+        </p>
       </section>
       <ReminderList id="due" title="Due" empty="Nothing due. Nice." reminders={lists.due.map(toReminderItem)} />
       <ReminderList

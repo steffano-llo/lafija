@@ -3,7 +3,7 @@ import { setApplicationArchivedAction } from "@/app/dashboard/applications/actio
 import { buttonVariants } from "@/components/ui/button";
 import type { Application } from "@/server/applications";
 import { ArchiveButton } from "./archive-button";
-import { formatAppliedDate } from "./format";
+import { formatAppliedDate, formatSalary } from "./format";
 
 export { formatAppliedDate };
 
@@ -26,6 +26,7 @@ export function ApplicationsTable({ applications, archived }: { applications: Ap
             <th scope="col" className="px-3 py-2 font-medium">Stage</th>
             <th scope="col" className="px-3 py-2 font-medium">Applied</th>
             <th scope="col" className="px-3 py-2 font-medium">Source</th>
+            <th scope="col" className="px-3 py-2 font-medium">Salary</th>
             <th scope="col" className="px-3 py-2 font-medium">
               <span className="sr-only">Actions</span>
             </th>
@@ -50,6 +51,7 @@ export function ApplicationsTable({ applications, archived }: { applications: Ap
               </td>
               <td className="px-3 py-2 whitespace-nowrap">{formatAppliedDate(item.appliedAt)}</td>
               <td className="px-3 py-2">{item.source ?? "—"}</td>
+              <td className="px-3 py-2 whitespace-nowrap">{formatSalary(item.salaryRange, item.salaryCurrency)}</td>
               <td className="px-3 py-2">
                 <div className="flex items-start justify-end gap-2">
                   <Link

@@ -43,6 +43,13 @@
       "when": 1794811127474,
       "tag": "0005_reminders",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1794865902776,
+      "tag": "0006_time_zone_currency_and_due_rules",
+      "breakpoints": true
     }
   ]
 }

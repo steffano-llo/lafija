@@ -83,7 +83,8 @@ describe("migration 0005 (reminders) on a populated database", () => {
     await client.exec(POPULATED);
     const before = JSON.stringify((await client.query(`select * from application order by id`)).rows);
 
-    await migrate(db, { migrationsFolder });
+    // Up to 0005 only: later migrations add columns of their own (tested in their own files).
+    await migrate(db, { migrationsFolder: migrationsUpTo(tagStartingWith("0005")) });
 
     const rows = await client.query<{
       user_id: string;

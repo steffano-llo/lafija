@@ -16,6 +16,7 @@ describe("parseApplicationInput", () => {
         url: "  ",
         source: "",
         salaryRange: " 50k-60k ",
+        salaryCurrency: "USD",
         appliedAt: "",
       }),
     ).toEqual({
@@ -26,6 +27,7 @@ describe("parseApplicationInput", () => {
         url: null,
         source: null,
         salaryRange: "50k-60k",
+        salaryCurrency: "USD",
         appliedAt: null,
       },
     });
@@ -34,7 +36,7 @@ describe("parseApplicationInput", () => {
   it("accepts missing optional fields", () => {
     expect(parseApplicationInput(valid)).toEqual({
       success: true,
-      data: { ...valid, url: null, source: null, salaryRange: null, appliedAt: null },
+      data: { ...valid, url: null, source: null, salaryRange: null, salaryCurrency: null, appliedAt: null },
     });
   });
 

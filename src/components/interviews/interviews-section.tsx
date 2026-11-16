@@ -19,6 +19,9 @@ import { Label } from "@/components/ui/label";
 import { NativeSelect } from "@/components/ui/native-select";
 import { Textarea } from "@/components/ui/textarea";
 import {
+  INTERVIEW_OLD_DATE_WARNING,
+  INTERVIEW_RECORD_OUTCOME_HINT,
+  isMoreThanAYearAgo,
   INTERVIEW_NOTES_MAX,
   INTERVIEW_OUTCOMES,
   INTERVIEW_OUTCOME_LABELS,
@@ -65,6 +68,12 @@ function InterviewForm({
   );
   const id = (field: string) => `${idPrefix}-${field}`;
   const errors = state.fieldErrors ?? {};
+  // Non-blocking: an old date is allowed, but it is often a typo in the year.
+  const [localDate, setLocalDate] = useState(initialValues.scheduledAtLocal ?? "");
+  const oldDate = localDate !== "" && isMoreThanAYearAgo(new Date(localDate));
+  const dateDescription = [errors.scheduledAt && id("scheduledAt-error"), oldDate && id("scheduledAt-warning")]
+    .filter(Boolean)
+    .join(" ");
 
   return (
     <form action={formAction} className="flex flex-col gap-3" noValidate>
@@ -77,10 +86,16 @@ function InterviewForm({
             type="datetime-local"
             required
             defaultValue={state.values.scheduledAtLocal ?? ""}
+            onChange={(event) => setLocalDate(event.target.value)}
             aria-invalid={errors.scheduledAt ? true : undefined}
-            aria-describedby={errors.scheduledAt ? id("scheduledAt-error") : undefined}
+            aria-describedby={dateDescription || undefined}
           />
           <FieldError id={id("scheduledAt-error")} errors={errors.scheduledAt} />
+          {oldDate && (
+            <p id={id("scheduledAt-warning")} className="text-sm text-muted-foreground">
+              {INTERVIEW_OLD_DATE_WARNING}
+            </p>
+          )}
         </div>
         <div className="flex flex-col gap-2">
           <Label htmlFor={id("type")}>Type</Label>
@@ -189,6 +204,7 @@ function InterviewRow({ applicationId, interview }: { applicationId: string; int
         </p>
         <span className="text-sm text-muted-foreground">{INTERVIEW_OUTCOME_LABELS[interview.outcome]}</span>
       </div>
+      {interview.needsOutcome && <p className="text-sm text-destructive">{INTERVIEW_RECORD_OUTCOME_HINT}</p>}
       {interview.notes && <p className="text-sm whitespace-pre-wrap">{interview.notes}</p>}
       <div className="flex flex-wrap items-center gap-2">
         <form action={outcomeAction} className="flex items-center gap-2">
