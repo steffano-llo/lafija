@@ -8,9 +8,11 @@ import {
   FALLBACK_TIME_ZONE,
   isTimeZoneShape,
   parseCurrencySettings,
+  parseEmailRemindersSettings,
   parseTimeZoneSettings,
   TIME_ZONE_INVALID_MESSAGE,
   type CurrencyFieldErrors,
+  type EmailRemindersFieldErrors,
   type TimeZoneFieldErrors,
 } from "@/lib/validation/settings";
 import type { Db } from "./applications";
@@ -132,4 +134,30 @@ export async function setDefaultCurrency(db: Db, userId: string, input: unknown)
     .values({ userId, defaultCurrency })
     .onConflictDoUpdate({ target: userSettings.userId, set: { defaultCurrency, updatedAt: new Date() } });
   return { ok: true, defaultCurrency };
+}
+
+export type EmailRemindersResult =
+  | { ok: true; emailReminders: boolean }
+  | { ok: false; reason: "invalid"; fieldErrors: EmailRemindersFieldErrors };
+
+/** Whether the user's due reminders are emailed (no settings row = on). */
+export async function getEmailReminders(db: Db, userId: string): Promise<boolean> {
+  const [row] = await db
+    .select({ emailReminders: userSettings.emailReminders })
+    .from(userSettings)
+    .where(eq(userSettings.userId, userId))
+    .limit(1);
+  return row?.emailReminders ?? true;
+}
+
+/** Turns reminder emails on or off for this user only; reminders stay in-app either way. */
+export async function setEmailReminders(db: Db, userId: string, input: unknown): Promise<EmailRemindersResult> {
+  const parsed = parseEmailRemindersSettings(input);
+  if (!parsed.success) return { ok: false, reason: "invalid", fieldErrors: parsed.fieldErrors };
+  const { emailReminders } = parsed.data;
+  await db
+    .insert(userSettings)
+    .values({ userId, emailReminders })
+    .onConflictDoUpdate({ target: userSettings.userId, set: { emailReminders, updatedAt: new Date() } });
+  return { ok: true, emailReminders };
 }

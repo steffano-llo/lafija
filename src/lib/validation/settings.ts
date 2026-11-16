@@ -54,3 +54,16 @@ export function parseCurrencySettings(
   if (result.success) return { success: true, data: result.data };
   return { success: false, fieldErrors: { defaultCurrency: [CURRENCY_INVALID_MESSAGE] } };
 }
+
+export const EMAIL_REMINDERS_INVALID_MESSAGE = "Choose on or off.";
+
+export const emailRemindersSettingsSchema = z.object({ emailReminders: z.boolean() });
+export type EmailRemindersFieldErrors = { emailReminders?: string[] };
+
+export function parseEmailRemindersSettings(
+  input: unknown,
+): { success: true; data: { emailReminders: boolean } } | { success: false; fieldErrors: EmailRemindersFieldErrors } {
+  const result = emailRemindersSettingsSchema.safeParse(input ?? {});
+  if (result.success) return { success: true, data: result.data };
+  return { success: false, fieldErrors: { emailReminders: [EMAIL_REMINDERS_INVALID_MESSAGE] } };
+}

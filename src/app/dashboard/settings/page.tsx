@@ -2,12 +2,13 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { Suspense } from "react";
 import { DashboardHeader } from "@/components/reminders/dashboard-header";
+import { EmailRemindersForm } from "@/components/settings/email-reminders-form";
 import { SettingsSelectForm } from "@/components/settings/settings-select-form";
 import { getDb } from "@/db";
 import { requireUser } from "@/lib/session";
 import { CURRENCIES, FALLBACK_TIME_ZONE } from "@/lib/validation/settings";
-import { getUserSettings, listTimeZones } from "@/server/settings";
-import { setDefaultCurrencyAction, setTimeZoneAction } from "./actions";
+import { getEmailReminders, getUserSettings, listTimeZones } from "@/server/settings";
+import { setDefaultCurrencyAction, setEmailRemindersAction, setTimeZoneAction } from "./actions";
 
 export const metadata: Metadata = { title: "Settings · laFija" };
 
@@ -16,7 +17,11 @@ const currencyOptions = CURRENCIES.map((code) => ({ value: code, label: code }))
 async function SettingsForms() {
   const user = await requireUser();
   const db = getDb();
-  const [settings, zones] = await Promise.all([getUserSettings(db, user.id), listTimeZones(db)]);
+  const [settings, zones, emailReminders] = await Promise.all([
+    getUserSettings(db, user.id),
+    listTimeZones(db),
+    getEmailReminders(db, user.id),
+  ]);
 
   return (
     <>
@@ -52,6 +57,12 @@ async function SettingsForms() {
           value={settings.defaultCurrency}
           action={setDefaultCurrencyAction}
         />
+      </section>
+      <section aria-labelledby="email-heading" className="flex flex-col gap-3 rounded-lg p-4 ring-1 ring-foreground/10">
+        <h2 id="email-heading" className="text-lg font-semibold">
+          Email
+        </h2>
+        <EmailRemindersForm enabled={emailReminders} action={setEmailRemindersAction} />
       </section>
     </>
   );

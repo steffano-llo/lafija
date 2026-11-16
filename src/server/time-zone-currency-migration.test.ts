@@ -89,7 +89,8 @@ describe("migration 0006 on a populated database", () => {
     const remindersBefore = (await client.query<Record<string, unknown>>(`select * from reminder order by id`)).rows;
     const settingsBefore = (await client.query<Record<string, unknown>>(`select * from user_settings order by user_id`)).rows;
 
-    await migrate(db, { migrationsFolder });
+    // Up to 0006 only: later migrations add columns of their own (tested in their own files).
+    await migrate(db, { migrationsFolder: migrationsUpTo("0006") });
 
     const apps = (await client.query<Record<string, unknown>>(`select * from application order by id`)).rows;
     expect(apps.map((a) => [a.id, a.salary_currency])).toEqual([

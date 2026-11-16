@@ -4,8 +4,12 @@ import { revalidatePath } from "next/cache";
 import type { SettingsFormState } from "@/components/settings/form-state";
 import { getDb } from "@/db";
 import { requireUser } from "@/lib/session";
-import { CURRENCY_INVALID_MESSAGE, TIME_ZONE_INVALID_MESSAGE } from "@/lib/validation/settings";
-import { saveDetectedTimeZone, setDefaultCurrency, setTimeZone } from "@/server/settings";
+import {
+  CURRENCY_INVALID_MESSAGE,
+  EMAIL_REMINDERS_INVALID_MESSAGE,
+  TIME_ZONE_INVALID_MESSAGE,
+} from "@/lib/validation/settings";
+import { saveDetectedTimeZone, setDefaultCurrency, setEmailReminders, setTimeZone } from "@/server/settings";
 
 // Every action: `requireUser()` first, then a data function that validates its input and filters by
 // the user. A time zone change moves follow-up due times shown on every dashboard page.
@@ -50,4 +54,20 @@ export async function setDefaultCurrencyAction(
   if (!result.ok) return { value, error: result.fieldErrors.defaultCurrency?.[0] ?? CURRENCY_INVALID_MESSAGE };
   revalidateDashboard();
   return { value: result.defaultCurrency, saved: true };
+}
+
+/** Checkbox: `on` when checked, absent when not; any other value is refused by validation. */
+export async function setEmailRemindersAction(
+  state: SettingsFormState,
+  formData: FormData,
+): Promise<SettingsFormState> {
+  const user = await requireUser();
+  const raw = formData.get("emailReminders");
+  const emailReminders = raw === null ? false : raw === "on" ? true : raw;
+  const result = await setEmailReminders(getDb(), user.id, { emailReminders });
+  if (!result.ok) {
+    return { value: state.value, error: result.fieldErrors.emailReminders?.[0] ?? EMAIL_REMINDERS_INVALID_MESSAGE };
+  }
+  revalidatePath("/dashboard/settings");
+  return { value: result.emailReminders ? "on" : "off", saved: true };
 }

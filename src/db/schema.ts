@@ -358,7 +358,8 @@ export const reminderKind = pgEnum("reminder_kind", REMINDER_KINDS);
  * `follow_up` ones are created in the same transaction as a transition into an active-category
  * stage (one per transition, see `syncFollowUpSql`) and closed (`done_at`) by the next transition
  * or by archiving.
- * `sent_at` is set once the reminder has been emailed (T8).
+ * `sent_at` is set when the email job claims the reminder and cleared again if that email fails
+ * (`src/server/reminder-emails.ts`).
  */
 export const reminder = pgTable(
   "reminder",
@@ -426,6 +427,8 @@ export const userSettings = pgTable(
     timeZone: text("time_zone"),
     // ISO 4217 code preselected for new salaries.
     defaultCurrency: text("default_currency").notNull().default(DEFAULT_CURRENCY),
+    // Due reminders are emailed (digest) when on and the address is allowed; in-app either way.
+    emailReminders: boolean("email_reminders").notNull().default(true),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true })
       .notNull()
