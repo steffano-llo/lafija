@@ -347,8 +347,9 @@ export const reminderKind = pgEnum("reminder_kind", REMINDER_KINDS);
 
 /**
  * A reminder about one application, deleted with it. `manual` ones are written by the user;
- * `follow_up` ones are created in the same statement as a transition into an active-category stage
- * (one per transition) and closed (`done_at`) by the next transition or by archiving.
+ * `follow_up` ones are created in the same transaction as a transition into an active-category
+ * stage (one per transition, see `syncFollowUpSql`) and closed (`done_at`) by the next transition
+ * or by archiving.
  * `sent_at` is set once the reminder has been emailed (T8).
  */
 export const reminder = pgTable(

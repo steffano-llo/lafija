@@ -5,11 +5,11 @@ import type { PgDatabase, PgQueryResultHKT } from "drizzle-orm/pg-core";
 import * as schema from "@/db/schema";
 import { application, company, stage } from "@/db/schema";
 import { parseApplicationInput, parseNotesInput, type FieldErrors } from "@/lib/validation/application";
-import { followUpMessage } from "@/lib/validation/reminder";
 import type { StageCategory } from "@/lib/validation/stage";
-import { bottomKey, rowsOf } from "./board";
+import { bottomKey } from "./board";
 import { isId } from "./ids";
-import { closeFollowUpsOfArchivedCte, followUpCtes } from "./reminders";
+import { runAtomic } from "./atomic";
+import { syncFollowUpSql } from "./reminders";
 import { ensureDefaultStages } from "./stages";
 
 /**
@@ -168,8 +168,9 @@ async function loaded(db: Db, userId: string, id: string): Promise<ApplicationRe
 
 /**
  * Validates the input, finds or creates the company by name and stores a new application at the
- * bottom of its stage's column. The insert, its first transition (null → stage) and, in an active
- * stage, its automatic follow-up reminder are one statement.
+ * bottom of its stage's column. The insert and its first transition (null → stage) are one
+ * statement; a second one in the same transaction creates, in an active stage, its automatic
+ * follow-up reminder (`syncFollowUpSql`).
  */
 export async function createApplication(db: Db, userId: string, input: unknown): Promise<ApplicationResult> {
   const parsed = parseApplicationInput(input);
@@ -182,7 +183,8 @@ export async function createApplication(db: Db, userId: string, input: unknown):
   const target = await findOrCreateCompany(db, userId, companyName);
   const id = crypto.randomUUID();
   const position = await bottomKey(db, userId, stageId);
-  await db.execute(sql`
+  await runAtomic(db, [
+    sql`
     with "created" as (
       insert into "application"
         ("id", "user_id", "company_id", "stage_id", "role", "url", "source", "salary_range", "applied_at", "position")
@@ -193,11 +195,12 @@ export async function createApplication(db: Db, userId: string, input: unknown):
     "logged" as (
       insert into "stage_transition" ("id", "user_id", "application_id", "from_stage_id", "to_stage_id", "at")
       select gen_random_uuid()::text, c."user_id", c."id", null, c."stage_id", c."created_at" from "created" c
-      returning "id", "user_id", "application_id", "to_stage_id", "at"
-    ),
-    ${followUpCtes(followUpMessage(target.name, fields.role))}
+      returning "id"
+    )
     select "id" from "logged"
-  `);
+  `,
+    syncFollowUpSql(userId, id),
+  ]);
   return loaded(db, userId, id);
 }
 
@@ -205,9 +208,9 @@ export async function createApplication(db: Db, userId: string, input: unknown):
  * Replaces the editable fields of the user's application. Ownership is checked first,
  * so a foreign or unknown id never creates a company for the caller. A missing `stageId`
  * keeps the current stage. A new stage puts the application at the bottom of that column and
- * appends a transition in the same statement as the update, and replaces the automatic follow-up
- * reminder like a board move does. A new company unlinks the contacts of the old one in that
- * statement too.
+ * appends a transition in the same statement as the update. A new company unlinks the contacts of
+ * the old one in that statement too. A second statement in the same transaction syncs the automatic
+ * follow-up reminder like a board move does (`syncFollowUpSql`).
  */
 export async function updateApplication(
   db: Db,
@@ -226,7 +229,8 @@ export async function updateApplication(
   const target = await findOrCreateCompany(db, userId, companyName);
   // Used only if the stage changes; the statement keeps the current key otherwise.
   const position = await bottomKey(db, userId, stageId);
-  const result = await db.execute(sql`
+  const [updated] = await runAtomic(db, [
+    sql`
     with "current" as (
       select a."id", a."user_id", a."stage_id" from "application" a
       where a."id" = ${id} and a."user_id" = ${userId}
@@ -251,9 +255,8 @@ export async function updateApplication(
       insert into "stage_transition" ("id", "user_id", "application_id", "from_stage_id", "to_stage_id")
       select gen_random_uuid()::text, u."user_id", u."id", u."from_stage_id", u."to_stage_id"
       from "updated" u where u."from_stage_id" <> u."to_stage_id"
-      returning "id", "user_id", "application_id", "to_stage_id", "at"
+      returning "id"
     ),
-    ${followUpCtes(followUpMessage(target.name, fields.role))},
     -- Contacts belong to a company: a new company drops the links to the old company's contacts.
     -- Same statement, so the foreign keys (checked at its end) never see a link across companies.
     "unlinked" as (
@@ -262,8 +265,10 @@ export async function updateApplication(
       returning ac."contact_id"
     )
     select "id" from "updated"
-  `);
-  if (rowsOf<{ id: string }>(result).length === 0) return notFound;
+  `,
+    syncFollowUpSql(userId, id),
+  ]);
+  if (updated.length === 0) return notFound;
   return loaded(db, userId, id);
 }
 
@@ -271,7 +276,8 @@ export async function updateApplication(
  * Archives or restores the user's application. Restoring is refused (`stage_archived`) while its
  * stage is archived, so no active application ever sits in an archived stage: the user unarchives
  * the stage or edits the application into another stage first. The check is part of the update.
- * Archiving closes the open automatic follow-up in the same statement; restoring creates none.
+ * Archiving syncs (closes) the open automatic follow-up in a second statement of the same
+ * transaction; restoring creates none.
  */
 export async function setApplicationArchived(
   db: Db,
@@ -283,20 +289,17 @@ export async function setApplicationArchived(
     select 1 from "stage" s
     where s."id" = ${application.stageId} and s."user_id" = ${application.userId} and s."archived" = false
   )`;
-  let updated: { id: string }[];
+  let updated: unknown[];
   if (archived) {
     if (!isId(id)) return notFound;
-    updated = rowsOf<{ id: string }>(
-      await db.execute(sql`
-        with "archived" as (
-          update "application" set "archived" = true, "updated_at" = now()
-          where "id" = ${id} and "user_id" = ${userId}
-          returning "id", "user_id"
-        ),
-        ${closeFollowUpsOfArchivedCte}
-        select "id" from "archived"
-      `),
-    );
+    [updated] = await runAtomic(db, [
+      sql`
+        update "application" set "archived" = true, "updated_at" = now()
+        where "id" = ${id} and "user_id" = ${userId}
+        returning "id"
+      `,
+      syncFollowUpSql(userId, id),
+    ]);
   } else {
     updated = await db
       .update(application)

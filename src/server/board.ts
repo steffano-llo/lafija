@@ -8,7 +8,8 @@ import type { StageCategory } from "@/lib/validation/stage";
 import type { Db } from "./applications";
 import { isId } from "./ids";
 import { keyAfter, keyForIndex } from "./ordering";
-import { followUpCtes } from "./reminders";
+import { runAtomic } from "./atomic";
+import { syncFollowUpSql } from "./reminders";
 
 export type BoardCard = { id: string; companyName: string; role: string; appliedAt: string | null };
 
@@ -157,9 +158,10 @@ export async function bottomKey(db: Db, userId: string, stageId: string): Promis
 /**
  * Moves the user's non-archived application to `index` in the column of `stageId` (a non-archived
  * stage of the same user). A change of stage appends a transition in the same statement as the
- * update, so one never happens without the other, and replaces the automatic follow-up reminder
- * (see `followUpCtes`) in that statement too; a reorder within the column records nothing and
- * leaves reminders alone.
+ * update, so one never happens without the other; a reorder within the column records nothing.
+ * A second statement in the same transaction then syncs the automatic follow-up reminder
+ * (`syncFollowUpSql`): after a stage change the old one is closed and, in an active stage, a new
+ * one starts; with consistent data a reorder changes no reminder.
  */
 export async function moveApplication(
   db: Db,
@@ -172,7 +174,8 @@ export async function moveApplication(
   const { stageId, index } = parsed.data;
 
   const position = keyForIndex(await columnKeys(db, userId, stageId, id), index);
-  const result = await db.execute(sql`
+  const [moved] = await runAtomic(db, [
+    sql`
     with "current" as (
       select a."id", a."user_id", a."stage_id" from "application" a
       where a."id" = ${id} and a."user_id" = ${userId} and a."archived" = false
@@ -191,12 +194,13 @@ export async function moveApplication(
       insert into "stage_transition" ("id", "user_id", "application_id", "from_stage_id", "to_stage_id")
       select gen_random_uuid()::text, m."user_id", m."id", m."from_stage_id", m."to_stage_id"
       from "moved" m where m."from_stage_id" <> m."to_stage_id"
-      returning "id", "user_id", "application_id", "to_stage_id", "at"
-    ),
-    ${followUpCtes(null)}
+      returning "id"
+    )
     select "id" from "moved"
-  `);
-  if (rowsOf<{ id: string }>(result).length > 0) return { ok: true };
+  `,
+    syncFollowUpSql(userId, id),
+  ]);
+  if (moved.length > 0) return { ok: true };
 
   const [own] = await db
     .select({ id: application.id })

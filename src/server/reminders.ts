@@ -12,6 +12,7 @@ import {
   type ReminderKind,
 } from "@/lib/validation/reminder";
 import type { Db } from "./applications";
+import { runAtomic } from "./atomic";
 import { isId } from "./ids";
 
 export type Reminder = {
@@ -70,66 +71,87 @@ const reminderColumns = {
 };
 
 /**
- * CTEs that keep automatic follow-ups in step with stage changes. They go in the same statement as
- * the change, after a CTE named "logged" that returns the new transitions as
- * ("id", "user_id", "application_id", "to_stage_id", "at"). For each transition they close the
- * application's open follow-up and, when the target stage's category is `active`, the application is
- * not archived and the user's follow-up days are not off, insert a follow-up due that many days
- * after the transition. `message` is the follow-up text when the caller knows it (the application
- * row is not visible to the statement on create, or still has the old company and role on edit);
- * null builds it from the stored application.
+ * The transition an application's open follow-up belongs to: its latest transition into its
+ * current stage. That is its latest transition, except when two concurrent stage changes record
+ * their start times out of lock order (`stage_transition.at` is the transaction start); the stage
+ * the application is in decides. `a` is the application row's alias.
  */
-export function followUpCtes(message: string | null): SQL {
-  const messageSql =
-    message === null
-      ? sql`(
-          select left('Follow up with ' || co."name" || ' about ' || ap."role", 500)
-          from "application" ap join "company" co on co."id" = ap."company_id" and co."user_id" = ap."user_id"
-          where ap."id" = l."application_id" and ap."user_id" = l."user_id"
-        )`
-      : sql`${message}::text`;
+const currentTransitionSql = (a: SQL): SQL => sql`(
+  select st."id" from "stage_transition" st
+  where st."application_id" = ${a}."id" and st."user_id" = ${a}."user_id" and st."to_stage_id" = ${a}."stage_id"
+  order by st."at" desc, (st."from_stage_id" is not null) desc, st."id" desc
+  limit 1
+)`;
+
+/**
+ * One statement that brings the automatic follow-up of the user's application in line with
+ * committed data. Wanted: one open follow-up for the application's current transition (see
+ * `currentTransitionSql`) when the application is not archived, its stage's category is `active`
+ * and the user's follow-up days are not off. The statement closes every other open follow-up of the
+ * application and inserts the wanted one, due that many days after the transition, unless a
+ * follow-up of that transition already exists, open or done: one the user marked done stays done.
+ * Idempotent. Callers run it after the statement that locks and writes the application, in the
+ * same transaction (`runAtomic`): under READ COMMITTED it then reads a snapshot taken after the
+ * lock, so it sees whatever a concurrent writer of the same application committed first.
+ */
+export function syncFollowUpSql(userId: string, applicationId: string): SQL {
   return sql`
-    "follow_up_closed" as (
-      update "reminder" r set "done_at" = now(), "updated_at" = now()
-      from "logged" l
-      where r."application_id" = l."application_id" and r."user_id" = l."user_id"
-        and r."kind" = 'follow_up' and r."done_at" is null
-      returning r."id"
+    with "app" as (
+      select a."id", a."user_id", a."stage_id", a."company_id", a."role", a."archived",
+        ${currentTransitionSql(sql`a`)} as "transition_id"
+      from "application" a
+      where a."id" = ${applicationId} and a."user_id" = ${userId}
     ),
-    "follow_up_created" as (
-      insert into "reminder" ("id", "user_id", "application_id", "kind", "due_at", "message", "transition_id")
-      select gen_random_uuid()::text, l."user_id", l."application_id", 'follow_up',
-        l."at" + make_interval(days => f."days"), ${messageSql}, l."id"
-      from "logged" l
-      join "stage" s on s."id" = l."to_stage_id" and s."user_id" = l."user_id" and s."category" = 'active'
+    "wanted" as (
+      select a."id" as "application_id", a."user_id", st."id" as "transition_id",
+        st."at" + make_interval(days => f."days") as "due_at",
+        left('Follow up with ' || co."name" || ' about ' || a."role", 500) as "message"
+      from "app" a
+      join "stage_transition" st on st."id" = a."transition_id" and st."user_id" = a."user_id"
+      join "stage" s on s."id" = a."stage_id" and s."user_id" = a."user_id" and s."category" = 'active'
+      join "company" co on co."id" = a."company_id" and co."user_id" = a."user_id"
       cross join lateral (
         -- No settings row means the default; a row with null means follow-ups are off.
         select case when us."user_id" is null then ${FOLLOW_UP_DAYS_DEFAULT}::int else us."follow_up_days" end as "days"
-        from (select 1) as "one" left join "user_settings" us on us."user_id" = l."user_id"
+        from (select 1) as "one" left join "user_settings" us on us."user_id" = a."user_id"
       ) f
+      where not a."archived" and f."days" is not null
+    ),
+    "closed" as (
+      update "reminder" r set "done_at" = now(), "updated_at" = now()
+      where r."application_id" = ${applicationId} and r."user_id" = ${userId}
+        and r."kind" = 'follow_up' and r."done_at" is null
+        and r."transition_id" is distinct from (select w."transition_id" from "wanted" w)
+      returning r."id"
+    ),
+    "created" as (
+      insert into "reminder" ("id", "user_id", "application_id", "kind", "due_at", "message", "transition_id")
+      select gen_random_uuid()::text, w."user_id", w."application_id", 'follow_up', w."due_at", w."message", w."transition_id"
+      from "wanted" w
       -- Reading the closed rows makes the close run first, so the "one open follow-up per
       -- application" index never sees the old and the new one open together.
-      cross join (select count(*) from "follow_up_closed") as "closed_count"
-      where f."days" is not null
-        and not exists (
-          select 1 from "application" ap
-          where ap."id" = l."application_id" and ap."user_id" = l."user_id" and ap."archived"
-        )
+      cross join (select count(*) from "closed") as "closed_count"
+      where not exists (
+        select 1 from "reminder" r where r."kind" = 'follow_up' and r."transition_id" = w."transition_id"
+      )
       returning "id"
     )
+    select (select count(*) from "closed")::int as "closed", (select count(*) from "created")::int as "created"
   `;
 }
 
-/** Closes the open follow-up of applications returned by a CTE named "archived" ("id", "user_id"). */
-export const closeFollowUpsOfArchivedCte: SQL = sql`
-  "follow_up_closed" as (
-    update "reminder" r set "done_at" = now(), "updated_at" = now()
-    from "archived" a
-    where r."application_id" = a."id" and r."user_id" = a."user_id"
-      and r."kind" = 'follow_up' and r."done_at" is null
-    returning r."id"
-  )
-`;
+/** Runs `syncFollowUpSql` on its own (tests and repairs); writers batch it after their statement. */
+export async function syncFollowUp(db: Db, userId: string, applicationId: string): Promise<void> {
+  await db.execute(syncFollowUpSql(userId, applicationId));
+}
+
+/** True for a unique violation (23505), raw or wrapped by Drizzle in `cause`. */
+function isUniqueViolation(error: unknown): boolean {
+  for (let e: unknown = error, depth = 0; e && depth < 5; e = (e as { cause?: unknown }).cause, depth += 1) {
+    if ((e as { code?: unknown }).code === "23505") return true;
+  }
+  return false;
+}
 
 // Every query below filters by `userId`: callers pass the id returned by `requireUser()`.
 
@@ -246,7 +268,11 @@ export async function createReminder(
   return row ? loaded(db, userId, row.id) : notFound;
 }
 
-/** Replaces the due time and message of the user's reminder; a new due time is emailed again. */
+/**
+ * Replaces the due time and message of the user's reminder; a new due time is emailed again. The
+ * form submits whole minutes, so a due time in the same UTC minute as the stored one counts as
+ * unchanged: the stored value and `sent_at` stay (editing only the message is not a new due time).
+ */
 export async function updateReminder(db: Db, userId: string, id: string, input: unknown): Promise<ReminderResult> {
   if (!isId(id)) return notFound;
   const parsed = parseReminderInput(input);
@@ -256,12 +282,14 @@ export async function updateReminder(db: Db, userId: string, id: string, input: 
       : notFound;
   }
   const { dueAt, message } = parsed.data;
+  const sameMinute = sql`date_trunc('minute', ${reminder.dueAt} at time zone 'UTC')
+    = date_trunc('minute', ${dueAt.toISOString()}::timestamptz at time zone 'UTC')`;
   const [row] = await db
     .update(reminder)
     .set({
-      dueAt,
+      dueAt: sql`case when ${sameMinute} then ${reminder.dueAt} else ${dueAt.toISOString()}::timestamptz end`,
       message,
-      sentAt: sql`case when ${reminder.dueAt} = ${dueAt.toISOString()}::timestamptz then ${reminder.sentAt} else null end`,
+      sentAt: sql`case when ${sameMinute} then ${reminder.sentAt} else null end`,
     })
     .where(and(eq(reminder.userId, userId), eq(reminder.id, id)))
     .returning({ id: reminder.id });
@@ -270,8 +298,12 @@ export async function updateReminder(db: Db, userId: string, id: string, input: 
 
 /**
  * Marks the user's reminder done (`true`) or not done (`false`). A follow-up can only be reopened
- * while it belongs to the application's latest transition and the application is not archived, so
- * an application never has two open follow-ups or one from a stage it has left.
+ * while it belongs to the application's current transition (`currentTransitionSql`) and the
+ * application is not archived, so an application never has two open follow-ups or one from a stage
+ * it has left. The reopen first locks the application row, like every stage change does, so it
+ * runs entirely before or after a concurrent move and its check reads a snapshot from after the
+ * lock. If another follow-up of the application is open anyway, the unique index refuses the
+ * reopen and the result is `closed`, with nothing changed.
  */
 export async function setReminderDone(db: Db, userId: string, id: string, done: unknown): Promise<ReminderChangeResult> {
   if (!isId(id)) return notFound;
@@ -285,28 +317,34 @@ export async function setReminderDone(db: Db, userId: string, id: string, done: 
       .returning({ id: reminder.id });
     return row ? loaded(db, userId, row.id) : notFound;
   }
-  const reopenable = sql`(
-    ${reminder.doneAt} is null
-    or ${reminder.kind} = 'manual'
-    or (
-      exists (
-        select 1 from "application" a
-        where a."id" = ${reminder.applicationId} and a."user_id" = ${reminder.userId} and a."archived" = false
+  const lock = sql`
+    select a."id" from "application" a
+    where a."user_id" = ${userId}
+      and a."id" = (select r."application_id" from "reminder" r where r."id" = ${id} and r."user_id" = ${userId})
+    for update of a
+  `;
+  const reopen = sql`
+    update "reminder" r set "done_at" = null, "updated_at" = now()
+    where r."id" = ${id} and r."user_id" = ${userId}
+      and (
+        r."done_at" is null
+        or r."kind" = 'manual'
+        or exists (
+          select 1 from "application" a
+          where a."id" = r."application_id" and a."user_id" = r."user_id" and a."archived" = false
+            and r."transition_id" = ${currentTransitionSql(sql`a`)}
+        )
       )
-      and ${reminder.transitionId} = (
-        select st."id" from "stage_transition" st
-        where st."application_id" = ${reminder.applicationId} and st."user_id" = ${reminder.userId}
-        order by st."at" desc, (st."from_stage_id" is not null) desc, st."id" desc
-        limit 1
-      )
-    )
-  )`;
-  const [row] = await db
-    .update(reminder)
-    .set({ doneAt: null })
-    .where(and(own, reopenable))
-    .returning({ id: reminder.id });
-  if (row) return loaded(db, userId, row.id);
+    returning r."id"
+  `;
+  let reopened: unknown[];
+  try {
+    [, reopened] = await runAtomic(db, [lock, reopen]);
+  } catch (error) {
+    if (!isUniqueViolation(error)) throw error;
+    reopened = [];
+  }
+  if (reopened.length > 0) return loaded(db, userId, id);
   return (await getReminder(db, userId, id)) ? { ok: false, reason: "closed" } : notFound;
 }
 
@@ -343,7 +381,14 @@ export async function getFollowUpDays(db: Db, userId: string): Promise<number | 
   return row ? row.followUpDays : FOLLOW_UP_DAYS_DEFAULT;
 }
 
-/** Sets the user's follow-up days (1-60) or turns automatic follow-ups off. Existing reminders stay. */
+/**
+ * Sets the user's follow-up days (1-60) or turns automatic follow-ups off. Only later syncs use the
+ * new value: existing reminders are not touched now. The next write of an application (create,
+ * edit, board move or reorder, archive) syncs its follow-up: when off, that closes its open
+ * follow-up; a new number of days never moves an existing follow-up's due time; turned back on, an
+ * application in an active stage without a follow-up for its current transition gets one, due that
+ * many days after that transition.
+ */
 export async function setFollowUpDays(db: Db, userId: string, input: unknown): Promise<FollowUpSettingsResult> {
   const parsed = parseFollowUpSettings(input);
   if (!parsed.success) return { ok: false, reason: "invalid", fieldErrors: parsed.fieldErrors };
