@@ -353,3 +353,33 @@ describe("social providers", () => {
     expect(new URL(result.url!).searchParams.get("client_id")).toBe("google-client-id");
   });
 });
+
+describe("Google sign-in for a returning user", () => {
+  it("signs in again without storing the id token or plaintext tokens", async () => {
+    const profile = { sub: "google-sub-ret", email: "ret@example.com", emailVerified: true };
+    await googleCallback(profile);
+    const second = await googleCallback(profile);
+
+    expect(second.headers.get("location")).toBe("/dashboard");
+    const headers = new Headers({ cookie: cookieHeader(second.headers) });
+    expect((await getUserFromHeaders(auth, headers))?.email).toBe("ret@example.com");
+    const accounts = await accountsOf("ret@example.com");
+    expect(accounts).toHaveLength(1);
+    expect(accounts[0].idToken).toBeNull();
+    expect(accounts[0].accessToken).not.toContain(GOOGLE_TOKENS.access_token);
+  });
+
+  it("refuses a case-variant Google email for an existing account", async () => {
+    await signUp("case@example.com", "owner-password");
+    const result = await googleCallback({ sub: "google-sub-case", email: "CASE@Example.com", emailVerified: true });
+
+    expect(result.headers.get("location")).toBe("http://localhost:3000/sign-in?error=account_not_linked");
+    expect((await accountsOf("case@example.com")).map((account) => account.providerId)).toEqual(["credential"]);
+  });
+
+  it("does not let email sign-up claim a Google user's email", async () => {
+    await googleCallback({ sub: "google-sub-g1", email: "g1@example.com", emailVerified: true });
+
+    await expect(signUp("g1@example.com", "attacker-pass")).rejects.toMatchObject({ statusCode: 422 });
+  });
+});
