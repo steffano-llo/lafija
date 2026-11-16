@@ -96,6 +96,15 @@ describe("getUserFromHeaders", () => {
     await expect(getUserFromHeaders(auth, headers)).resolves.toBeNull();
   });
 
+  it("returns null for a validly signed cookie whose value was tampered with", async () => {
+    await signUp("gabi@example.com");
+    const cookie = (await signInHeaders("gabi@example.com")).get("cookie")!;
+    const tampered = cookie.replace(/=(.)/, (_match, first: string) => `=${first === "a" ? "b" : "a"}`);
+
+    expect(tampered).not.toBe(cookie);
+    await expect(getUserFromHeaders(auth, new Headers({ cookie: tampered }))).resolves.toBeNull();
+  });
+
   it("returns only the user that owns the session", async () => {
     await signUp("eva@example.com");
     await signUp("fede@example.com");
