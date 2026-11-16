@@ -95,7 +95,7 @@ Pages: `/dashboard/board` (main view), `/dashboard/applications` (active list, `
 | `npm run lint` | ESLint |
 | `npm run typecheck` | Generate route types, then TypeScript without emitting |
 | `npm test` | Unit and integration tests (Vitest; database tests run on in-memory PGlite, no setup needed) |
-| `npm run test:e2e` | End-to-end tests (Playwright, starts its own server on port 3100) |
+| `npm run test:e2e` | End-to-end tests (Playwright, starts its own server on port 3100) Next allows one `next dev` per folder: if yours is running, use `PLAYWRIGHT_BASE_URL=http://localhost:3000 npm run test:e2e`. |
 | `npm run db:generate` | Generate a SQL migration from `src/db/schema.ts` into `drizzle/` |
 | `npm run db:migrate` | Apply pending migrations to `DATABASE_URL` |
 | `npm run db:studio` | Browse the database with Drizzle Studio |
