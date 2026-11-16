@@ -155,6 +155,9 @@ export const application = pgTable(
     salaryRange: text("salary_range"),
     appliedAt: date("applied_at", { mode: "string" }),
     archived: boolean("archived").notNull().default(false),
+    // Board order within the stage: a fractional-indexing key compared with collate "C"
+    // (the migration declares the column that way; queries also say it explicitly).
+    position: text("position").notNull(),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true })
       .notNull()
@@ -163,6 +166,8 @@ export const application = pgTable(
   },
   (table) => [
     index("application_user_id_idx").on(table.userId),
+    // Target of the composite foreign key from stage_transition.
+    unique("application_id_user_id_unique").on(table.id, table.userId),
     // The company must belong to the same user as the application.
     foreignKey({
       name: "application_company_id_user_id_fk",
@@ -176,5 +181,50 @@ export const application = pgTable(
       foreignColumns: [stage.id, stage.userId],
     }),
     index("application_stage_id_idx").on(table.stageId),
+  ],
+);
+
+/**
+ * Append-only history of stage changes: one row when an application is created (from null)
+ * and one per change of stage. App code only inserts; statistics are computed from it.
+ */
+export const stageTransition = pgTable(
+  "stage_transition",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => crypto.randomUUID()),
+    userId: text("user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    applicationId: text("application_id").notNull(),
+    // Null for the transition recorded when the application was created.
+    fromStageId: text("from_stage_id"),
+    toStageId: text("to_stage_id").notNull(),
+    at: timestamp("at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    // Every reference must belong to the same user as the transition.
+    foreignKey({
+      name: "stage_transition_application_id_user_id_fk",
+      columns: [table.applicationId, table.userId],
+      foreignColumns: [application.id, application.userId],
+    }).onDelete("cascade"),
+    // A stage in any history cannot be deleted, only archived.
+    foreignKey({
+      name: "stage_transition_from_stage_id_user_id_fk",
+      columns: [table.fromStageId, table.userId],
+      foreignColumns: [stage.id, stage.userId],
+    }),
+    foreignKey({
+      name: "stage_transition_to_stage_id_user_id_fk",
+      columns: [table.toStageId, table.userId],
+      foreignColumns: [stage.id, stage.userId],
+    }),
+    // Per-user statistics over time, per-application history, and the stage "in use" checks.
+    index("stage_transition_user_id_at_idx").on(table.userId, table.at),
+    index("stage_transition_application_id_idx").on(table.applicationId, table.at),
+    index("stage_transition_from_stage_id_idx").on(table.fromStageId),
+    index("stage_transition_to_stage_id_idx").on(table.toStageId),
   ],
 );

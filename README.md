@@ -6,8 +6,8 @@ Job application tracker: register applications, move them through configurable s
 
 ## Stack
 
-Next.js (App Router, Cache Components) + TypeScript · PostgreSQL on Neon · Drizzle ORM · Zod · Better Auth · Tailwind CSS + shadcn/ui · Vitest · Playwright.
-Planned: dnd-kit, Recharts, Resend, Upstash QStash, deploy on Vercel.
+Next.js (App Router, Cache Components) + TypeScript · PostgreSQL on Neon · Drizzle ORM · Zod · Better Auth · Tailwind CSS + shadcn/ui · dnd-kit · fractional-indexing · Vitest · Playwright.
+Planned: Recharts, Resend, Upstash QStash, deploy on Vercel.
 
 ## Requirements
 
@@ -58,23 +58,33 @@ Better Auth owns `user`, `session`, `account` and `verification`. App tables (al
 | --- | --- | --- |
 | `company` | `id`, `user_id`, `name`, `website`, `notes`, `created_at`, `updated_at` | Unique per user on `lower(name)`: "Acme" and "ACME" are one company. |
 | `stage` | `id`, `user_id`, `name`, `category` (enum `active`, `offer`, `rejected`, `accepted`, `withdrawn`), `position`, `archived`, `created_at`, `updated_at` | Unique per user on `lower(name)`. Listed by `position` ascending. |
-| `application` | `id`, `user_id`, `company_id`, `stage_id`, `role`, `url`, `source`, `salary_range`, `applied_at` (date), `archived`, `created_at`, `updated_at` | Indexed by `user_id` and `stage_id`. `(company_id, user_id)` references `company(id, user_id)` and `(stage_id, user_id)` references `stage(id, user_id)`, so an application can only point to its owner's company and stage. `stage_id` is required. |
+| `application` | `id`, `user_id`, `company_id`, `stage_id`, `role`, `url`, `source`, `salary_range`, `applied_at` (date), `archived`, `position` (board order key, `collate "C"`), `created_at`, `updated_at` | Indexed by `user_id` and `stage_id`. `(company_id, user_id)` references `company(id, user_id)` and `(stage_id, user_id)` references `stage(id, user_id)`, so an application can only point to its owner's company and stage. `stage_id` is required. |
+| `stage_transition` | `id`, `user_id`, `application_id`, `from_stage_id` (null = created), `to_stage_id`, `at` | Append-only: app code inserts rows and never updates or deletes them; they go away only with their application or user (cascade). `(application_id, user_id)`, `(from_stage_id, user_id)` and `(to_stage_id, user_id)` reference rows of the same user. Indexed by `(user_id, at)`, `(application_id, at)`, `from_stage_id` and `to_stage_id`. |
 
 Data access lives in `src/server/` as plain functions taking `(db, userId, ...)`; every query filters by `userId`. Server Actions call `requireUser()` first and pass its `id`. Input is validated with the Zod schemas in `src/lib/validation/` (role and company required, `url` must be http(s), `applied_at` a real date not in the future in any time zone). Creating or editing an application takes a company name and finds or creates that user's company with `insert ... on conflict do nothing` followed by a select, because the Neon HTTP driver has no interactive transactions.
 
-Pages: `/dashboard/applications` (active list, `?view=archived` for archived), `/dashboard/applications/new`, `/dashboard/applications/<id>/edit`, `/dashboard/stages`.
+Pages: `/dashboard/board` (main view), `/dashboard/applications` (active list, `?view=archived` for archived), `/dashboard/applications/new`, `/dashboard/applications/<id>/edit`, `/dashboard/stages`.
 
 ### Stages
 
 - Every user starts with Applied, Screening, Interview (all `active`), Offer (`offer`), Rejected (`rejected`) and Accepted (`accepted`). `ensureDefaultStages()` in `src/server/stages.ts` inserts them in one `insert ... where not exists ... on conflict do nothing` statement, only when the user has no stage at all (archived included), so concurrent calls still give six stages. It runs when stages are listed or an application is created; sign-up itself is unchanged.
 - The category is what statistics will use; names are free to change.
 - On `/dashboard/stages` the user can create (appended at the end), rename, change the category, move up or down, archive, unarchive and delete stages.
-- Delete is refused (`in_use`) while any application, archived or not, uses the stage: archive it instead. The foreign key from `application` enforces the same rule in the database. When stage history is added (kanban moves), a stage that appears in any application's history will count as used as well.
+- Delete is refused (`in_use`) while any application, archived or not, uses the stage, or while the stage appears in any stage transition (as `from` or `to`): archive it instead. The foreign keys from `application` and `stage_transition` enforce the same rule in the database.
 - Archive is refused (`has_applications`) while non-archived applications are in the stage; move them first. Archived applications may stay in an archived stage.
 - The last non-archived stage can be neither archived nor deleted (`last_stage`).
 - Archive and delete check their rules inside the same `update`/`delete` statement that writes, because Neon HTTP has no interactive transactions.
 - Application forms offer the non-archived stages in order; a new application defaults to the first one. Editing keeps the current stage even if it was archived since; choosing another user's stage, an archived stage or an unknown id is refused with "Choose a valid stage." and nothing changes.
 - Migration `0002_stages` also works on a database that already has data: it creates the default stages for every existing user and puts every existing application in that user's Applied stage before making `stage_id` required.
+
+### Board and stage history
+
+- `/dashboard/board` has one column per non-archived stage, in stage order, with a card (company, role, applied date) for each non-archived application. Cards move within and between columns by mouse, touch or keyboard (focus a card, Space/Enter to pick it up, arrow keys to move, Space/Enter to drop, Escape to cancel); screen readers hear where the card is and where it was dropped, in English.
+- A move shows immediately. The server re-checks it (`moveApplication` in `src/server/board.ts`): the application must be the user's and not archived (`not_found` otherwise) and the target stage must be the user's and not archived (`invalid` otherwise). On refusal or a network error the card goes back and the board shows why; nothing is stored.
+- **Transitions** are recorded when an application is created (`null` → stage, at its `created_at`), when the edit form changes its stage, and when a card is moved to another column. Reordering within a column and edits that keep the stage record nothing. Each write and its transition are **one SQL statement** (`with moved as (update ... returning ...) insert into stage_transition ...`), because Neon HTTP has no interactive transactions: either both happen or neither does.
+- **Order within a column** uses [`fractional-indexing`](https://github.com/rocicorp/fractional-indexing) string keys in `application.position`. A key between any two keys always exists, so a move rewrites only the moved row and never needs a rebalancing pass (which a numeric midpoint would need once floats run out of precision, and which would be a multi-row write). Keys sort by code unit, so the column is `collate "C"` and every query orders by `position collate "C", id`. The server computes the key from the card's neighbours at the target index (`src/server/ordering.ts`); two concurrent moves into the same gap can produce equal keys, which only ties the order (broken by id) and later moves still find a key after the tied ones. New applications and applications whose stage changes in the edit form go to the bottom of the column.
+- **Unarchiving an application whose stage is archived is refused** with "Its stage is archived. Unarchive the stage, or edit the application into another stage, then unarchive it." Moving it automatically would record a stage change the user never made and skew statistics; refusing keeps the rule "no active application in an archived stage" without inventing history. The check is part of the unarchive `update` statement.
+- Migration `0003_board` works on a populated database, inside the single transaction `drizzle-kit migrate` uses: it gives existing applications keys `c000`, `c001`, … per user and stage by `created_at` (archived ones included), then records one `null` → current stage transition per existing application at its `created_at`, so statistics have a starting point. Earlier moves were never recorded and cannot be recovered.
 
 ## Scripts
 

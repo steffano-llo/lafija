@@ -18,6 +18,8 @@ function revalidate() {
   revalidatePath(STAGES_PATH);
   // Application forms and the list show stage names.
   revalidatePath("/dashboard/applications", "layout");
+  // The board has one column per active stage.
+  revalidatePath("/dashboard/board");
 }
 
 function failure(result: Exclude<StageResult, { ok: true }>, values: StageFormState["values"]): StageFormState {

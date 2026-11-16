@@ -6,6 +6,7 @@ import * as schema from "@/db/schema";
 import { application, company, stage } from "@/db/schema";
 import { parseApplicationInput, type FieldErrors } from "@/lib/validation/application";
 import type { StageCategory } from "@/lib/validation/stage";
+import { bottomKey, rowsOf } from "./board";
 import { ensureDefaultStages } from "./stages";
 
 /**
@@ -56,6 +57,8 @@ export type ApplicationResult =
   | { ok: true; application: Application }
   | { ok: false; reason: "invalid"; fieldErrors: FieldErrors }
   | { ok: false; reason: "not_found" };
+
+export type SetApplicationArchivedResult = ApplicationResult | { ok: false; reason: "stage_archived" };
 
 const notFound = { ok: false, reason: "not_found" } as const;
 
@@ -157,7 +160,10 @@ async function loaded(db: Db, userId: string, id: string): Promise<ApplicationRe
   return row ? { ok: true, application: row } : notFound;
 }
 
-/** Validates the input, finds or creates the company by name and stores a new application. */
+/**
+ * Validates the input, finds or creates the company by name and stores a new application at the
+ * bottom of its stage's column. The insert and its first transition (null → stage) are one statement.
+ */
 export async function createApplication(db: Db, userId: string, input: unknown): Promise<ApplicationResult> {
   const parsed = parseApplicationInput(input);
   if (!parsed.success) return { ok: false, reason: "invalid", fieldErrors: parsed.fieldErrors };
@@ -167,17 +173,27 @@ export async function createApplication(db: Db, userId: string, input: unknown):
   const stageId = await resolveStageId(db, userId, requestedStageId);
   if (!stageId) return invalidStage();
   const target = await findOrCreateCompany(db, userId, companyName);
-  const [row] = await db
-    .insert(application)
-    .values({ ...fields, userId, companyId: target.id, stageId })
-    .returning({ id: application.id });
-  return loaded(db, userId, row.id);
+  const id = crypto.randomUUID();
+  const position = await bottomKey(db, userId, stageId);
+  await db.execute(sql`
+    with "created" as (
+      insert into "application"
+        ("id", "user_id", "company_id", "stage_id", "role", "url", "source", "salary_range", "applied_at", "position")
+      values (${id}, ${userId}, ${target.id}, ${stageId}, ${fields.role}, ${fields.url}, ${fields.source},
+        ${fields.salaryRange}, ${fields.appliedAt}::date, ${position})
+      returning "id", "user_id", "stage_id", "created_at"
+    )
+    insert into "stage_transition" ("id", "user_id", "application_id", "from_stage_id", "to_stage_id", "at")
+    select gen_random_uuid()::text, c."user_id", c."id", null, c."stage_id", c."created_at" from "created" c
+  `);
+  return loaded(db, userId, id);
 }
 
 /**
  * Replaces the editable fields of the user's application. Ownership is checked first,
  * so a foreign or unknown id never creates a company for the caller. A missing `stageId`
- * keeps the current stage.
+ * keeps the current stage. A new stage puts the application at the bottom of that column and
+ * appends a transition in the same statement as the update.
  */
 export async function updateApplication(
   db: Db,
@@ -194,27 +210,64 @@ export async function updateApplication(
   const stageId = await resolveStageId(db, userId, requestedStageId, current.stageId);
   if (!stageId) return invalidStage();
   const target = await findOrCreateCompany(db, userId, companyName);
-  const updated = await db
-    .update(application)
-    .set({ ...fields, companyId: target.id, stageId })
-    .where(and(eq(application.userId, userId), eq(application.id, id)))
-    .returning({ id: application.id });
-  if (updated.length === 0) return notFound;
+  // Used only if the stage changes; the statement keeps the current key otherwise.
+  const position = await bottomKey(db, userId, stageId);
+  const result = await db.execute(sql`
+    with "current" as (
+      select a."id", a."user_id", a."stage_id" from "application" a
+      where a."id" = ${id} and a."user_id" = ${userId}
+      for update of a
+    ),
+    "updated" as (
+      update "application" a set
+        "company_id" = ${target.id},
+        "stage_id" = ${stageId},
+        "role" = ${fields.role},
+        "url" = ${fields.url},
+        "source" = ${fields.source},
+        "salary_range" = ${fields.salaryRange},
+        "applied_at" = ${fields.appliedAt}::date,
+        "position" = case when c."stage_id" = ${stageId} then a."position" else ${position} end,
+        "updated_at" = now()
+      from "current" c
+      where a."id" = c."id" and a."user_id" = c."user_id"
+      returning a."id", a."user_id", c."stage_id" as "from_stage_id", a."stage_id" as "to_stage_id"
+    ),
+    "logged" as (
+      insert into "stage_transition" ("id", "user_id", "application_id", "from_stage_id", "to_stage_id")
+      select gen_random_uuid()::text, u."user_id", u."id", u."from_stage_id", u."to_stage_id"
+      from "updated" u where u."from_stage_id" <> u."to_stage_id"
+      returning "id"
+    )
+    select "id" from "updated"
+  `);
+  if (rowsOf<{ id: string }>(result).length === 0) return notFound;
   return loaded(db, userId, id);
 }
 
-/** Archives or restores the user's application. */
+/**
+ * Archives or restores the user's application. Restoring is refused (`stage_archived`) while its
+ * stage is archived, so no active application ever sits in an archived stage: the user unarchives
+ * the stage or edits the application into another stage first. The check is part of the update.
+ */
 export async function setApplicationArchived(
   db: Db,
   userId: string,
   id: string,
   archived: boolean,
-): Promise<ApplicationResult> {
+): Promise<SetApplicationArchivedResult> {
+  const restoreGuard = sql`exists (
+    select 1 from "stage" s
+    where s."id" = ${application.stageId} and s."user_id" = ${application.userId} and s."archived" = false
+  )`;
   const updated = await db
     .update(application)
     .set({ archived })
-    .where(and(eq(application.userId, userId), eq(application.id, id)))
+    .where(and(eq(application.userId, userId), eq(application.id, id), archived ? undefined : restoreGuard))
     .returning({ id: application.id });
-  if (updated.length === 0) return notFound;
+  if (updated.length === 0) {
+    const current = await getApplication(db, userId, id);
+    return current ? { ok: false, reason: "stage_archived" } : notFound;
+  }
   return loaded(db, userId, id);
 }

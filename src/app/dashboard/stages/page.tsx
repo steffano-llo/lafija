@@ -40,7 +40,7 @@ export default function StagesPage() {
         <h1 className="text-2xl font-semibold">Stages</h1>
         <p className="text-sm text-muted-foreground">
           Stages are the columns your applications move through, in this order. The category says what a stage
-          means for your statistics. A stage that applications use cannot be deleted, only archived, and you can
+          means for your statistics. A stage that applications use or have been in cannot be deleted, only archived, and you can
           archive it once its active applications have moved on.
         </p>
       </div>

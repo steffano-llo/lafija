@@ -24,7 +24,10 @@ export default function DashboardPage() {
         <SignedInAs />
       </Suspense>
       <nav aria-label="Sections" className="flex flex-wrap gap-2">
-        <Link href="/dashboard/applications" className={buttonVariants()}>
+        <Link href="/dashboard/board" className={buttonVariants()}>
+          Open board
+        </Link>
+        <Link href="/dashboard/applications" className={buttonVariants({ variant: "outline" })}>
           View applications
         </Link>
         <Link href="/dashboard/stages" className={buttonVariants({ variant: "outline" })}>

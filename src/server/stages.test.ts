@@ -314,6 +314,19 @@ describe("deleteStage", () => {
     expect(await snapshot()).toBe(before);
   });
 
+  it("keeps the last active stage holding only an archived application: archive is last_stage, delete is in_use", async () => {
+    const userId = await newUser();
+    const stages = await listStages(db, userId);
+    for (const s of stages.slice(1)) await deleteStage(db, userId, s.id);
+    const app = await newApplication(userId, stages[0].id);
+    await setApplicationArchived(db, userId, app.id, true);
+    const before = await snapshot();
+
+    expect(await setStageArchived(db, userId, stages[0].id, true)).toEqual({ ok: false, reason: "last_stage" });
+    expect(await deleteStage(db, userId, stages[0].id)).toEqual({ ok: false, reason: "in_use" });
+    expect(await snapshot()).toBe(before);
+  });
+
   it("refuses to delete the last active stage", async () => {
     const userId = await newUser();
     const stages = await listStages(db, userId);

@@ -208,11 +208,20 @@ async function hasActiveApplications(db: Db, userId: string, id: string): Promis
   return rows.length > 0;
 }
 
-async function hasAnyApplication(db: Db, userId: string, id: string): Promise<boolean> {
+/** Raw SQL: some application of the user is in the stage, or the stage appears in any history. */
+const usedSql = (userId: string) => sql`(
+  exists (select 1 from "application" a where a."user_id" = ${userId} and a."stage_id" = "stage"."id")
+  or exists (
+    select 1 from "stage_transition" t
+    where t."user_id" = ${userId} and (t."from_stage_id" = "stage"."id" or t."to_stage_id" = "stage"."id")
+  )
+)`;
+
+async function isUsed(db: Db, userId: string, id: string): Promise<boolean> {
   const rows = await db
-    .select({ id: application.id })
-    .from(application)
-    .where(and(eq(application.userId, userId), eq(application.stageId, id)))
+    .select({ id: stage.id })
+    .from(stage)
+    .where(and(eq(stage.userId, userId), eq(stage.id, id), usedSql(userId)))
     .limit(1);
   return rows.length > 0;
 }
@@ -258,8 +267,9 @@ export async function setStageArchived(
 }
 
 /**
- * Deletes the user's stage when no application (archived or not) uses it and it is not
- * the last active stage. The foreign key from application also blocks a racing insert.
+ * Deletes the user's stage when no application (archived or not) uses it, no stage transition
+ * mentions it, and it is not the last active stage. The foreign keys from application and
+ * stage_transition also block a racing insert.
  */
 export async function deleteStage(db: Db, userId: string, id: string): Promise<DeleteStageResult> {
   let deleted: { id: string }[];
@@ -270,7 +280,7 @@ export async function deleteStage(db: Db, userId: string, id: string): Promise<D
         and(
           eq(stage.userId, userId),
           eq(stage.id, id),
-          sql`not exists (select 1 from "application" a where a."stage_id" = "stage"."id")`,
+          sql`not ${usedSql(userId)}`,
           sql`("stage"."archived" or ${anotherActiveStage(userId)})`,
         ),
       )
@@ -282,7 +292,7 @@ export async function deleteStage(db: Db, userId: string, id: string): Promise<D
 
   if (deleted.length === 0) {
     if (!(await getStage(db, userId, id))) return notFound;
-    if (await hasAnyApplication(db, userId, id)) return { ok: false, reason: "in_use" };
+    if (await isUsed(db, userId, id)) return { ok: false, reason: "in_use" };
     return { ok: false, reason: "last_stage" };
   }
   return { ok: true };

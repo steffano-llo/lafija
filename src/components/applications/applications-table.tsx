@@ -1,14 +1,11 @@
 import Link from "next/link";
 import { setApplicationArchivedAction } from "@/app/dashboard/applications/actions";
-import { Button, buttonVariants } from "@/components/ui/button";
+import { buttonVariants } from "@/components/ui/button";
 import type { Application } from "@/server/applications";
+import { ArchiveButton } from "./archive-button";
+import { formatAppliedDate } from "./format";
 
-const dateFormat = new Intl.DateTimeFormat("en-US", { dateStyle: "medium", timeZone: "UTC" });
-
-/** Calendar dates are stored without a time zone, so they are formatted as UTC midnight. */
-export function formatAppliedDate(value: string | null): string {
-  return value ? dateFormat.format(new Date(`${value}T00:00:00Z`)) : "—";
-}
+export { formatAppliedDate };
 
 export function ApplicationsTable({ applications, archived }: { applications: Application[]; archived: boolean }) {
   if (applications.length === 0) {
@@ -54,7 +51,7 @@ export function ApplicationsTable({ applications, archived }: { applications: Ap
               <td className="px-3 py-2 whitespace-nowrap">{formatAppliedDate(item.appliedAt)}</td>
               <td className="px-3 py-2">{item.source ?? "—"}</td>
               <td className="px-3 py-2">
-                <div className="flex justify-end gap-2">
+                <div className="flex items-start justify-end gap-2">
                   <Link
                     href={`/dashboard/applications/${item.id}/edit`}
                     className={buttonVariants({ variant: "outline", size: "sm" })}
@@ -62,16 +59,11 @@ export function ApplicationsTable({ applications, archived }: { applications: Ap
                   >
                     Edit
                   </Link>
-                  <form action={setApplicationArchivedAction.bind(null, item.id, !archived)}>
-                    <Button
-                      type="submit"
-                      variant="ghost"
-                      size="sm"
-                      aria-label={`${archived ? "Unarchive" : "Archive"} ${item.role} at ${item.companyName}`}
-                    >
-                      {archived ? "Unarchive" : "Archive"}
-                    </Button>
-                  </form>
+                  <ArchiveButton
+                    action={setApplicationArchivedAction.bind(null, item.id, !archived)}
+                    archived={archived}
+                    label={`${item.role} at ${item.companyName}`}
+                  />
                 </div>
               </td>
             </tr>

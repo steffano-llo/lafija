@@ -22,6 +22,13 @@
       "when": 1794804314694,
       "tag": "0002_stages",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1794805540976,
+      "tag": "0003_board",
+      "breakpoints": true
     }
   ]
 }

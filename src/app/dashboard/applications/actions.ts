@@ -2,7 +2,12 @@
 
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import { readApplicationForm, type ApplicationFormState } from "@/components/applications/form-state";
+import {
+  ARCHIVE_REFUSAL_MESSAGES,
+  readApplicationForm,
+  type ApplicationFormState,
+  type ArchiveState,
+} from "@/components/applications/form-state";
 import { getDb } from "@/db";
 import { requireUser } from "@/lib/session";
 import {
@@ -13,6 +18,12 @@ import {
 } from "@/server/applications";
 
 const LIST_PATH = "/dashboard/applications";
+const BOARD_PATH = "/dashboard/board";
+
+function revalidate() {
+  revalidatePath(LIST_PATH);
+  revalidatePath(BOARD_PATH);
+}
 
 function failure(
   result: Exclude<ApplicationResult, { ok: true }>,
@@ -32,7 +43,7 @@ export async function createApplicationAction(
   const values = readApplicationForm(formData);
   const result = await createApplication(getDb(), user.id, values);
   if (!result.ok) return failure(result, values);
-  revalidatePath(LIST_PATH);
+  revalidate();
   redirect(LIST_PATH);
 }
 
@@ -45,13 +56,23 @@ export async function updateApplicationAction(
   const values = readApplicationForm(formData);
   const result = await updateApplication(getDb(), user.id, id, values);
   if (!result.ok) return failure(result, values);
-  revalidatePath(LIST_PATH);
+  revalidate();
   redirect(result.application.archived ? `${LIST_PATH}?view=archived` : LIST_PATH);
 }
 
-/** Bound per row in the list; a foreign or unknown id changes nothing. */
-export async function setApplicationArchivedAction(id: string, archived: boolean): Promise<void> {
+/**
+ * Bound per row in the list; a foreign or unknown id changes nothing. Bound args are re-checked at
+ * runtime because the client can post any value.
+ */
+export async function setApplicationArchivedAction(id: unknown, archived: unknown): Promise<ArchiveState> {
   const user = await requireUser();
-  await setApplicationArchived(getDb(), user.id, id, archived);
-  revalidatePath(LIST_PATH);
+  if (typeof id !== "string" || typeof archived !== "boolean") return { message: ARCHIVE_REFUSAL_MESSAGES.not_found };
+  const result = await setApplicationArchived(getDb(), user.id, id, archived);
+  if (!result.ok) {
+    return {
+      message: result.reason === "stage_archived" ? ARCHIVE_REFUSAL_MESSAGES.stage_archived : ARCHIVE_REFUSAL_MESSAGES.not_found,
+    };
+  }
+  revalidate();
+  return {};
 }

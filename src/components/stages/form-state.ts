@@ -37,7 +37,7 @@ export function readStageForm(formData: FormData): StageFormValues {
 /** What the user sees when a stage operation is refused. */
 export const STAGE_REFUSAL_MESSAGES = {
   not_found: "This stage no longer exists.",
-  in_use: "Applications use this stage, so it cannot be deleted. Archive it instead.",
+  in_use: "Applications use this stage or have been in it, so it cannot be deleted. Archive it instead.",
   has_applications: "Move the active applications in this stage to another stage before archiving it.",
   last_stage: "You need at least one active stage.",
 } as const;
