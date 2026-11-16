@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { eq } from "drizzle-orm";
-import { user } from "@/db/schema";
+import { application, company, user } from "@/db/schema";
 import { createTestDb } from "@/test/db";
 
 vi.mock("server-only", () => ({}));
@@ -241,5 +241,47 @@ describe("per-user isolation", () => {
 
     expect(await getApplication(db, userId, created.id)).toBeNull();
     expect(await listCompanies(db, userId)).toEqual([]);
+  });
+});
+
+describe("per-user isolation regressions", () => {
+  async function snapshot() {
+    return JSON.stringify([
+      await db.select().from(application).orderBy(application.id),
+      await db.select().from(company).orderBy(company.id),
+    ]);
+  }
+
+  it("refuses to move another user's application to their company name, with no side effects", async () => {
+    const alice = await newUser();
+    const bob = await newUser();
+    const own = await create(alice, { companyName: "OnlyAlice", role: "R" });
+    await findOrCreateCompany(db, alice, "SecretAlice");
+    const before = await snapshot();
+
+    expect(await updateApplication(db, bob, own.id, { companyName: "SecretAlice", role: "X" })).toEqual({
+      ok: false,
+      reason: "not_found",
+    });
+    expect(await snapshot()).toBe(before);
+  });
+
+  it("database rejects an application pointing at another user's company", async () => {
+    const alice = await newUser();
+    const bob = await newUser();
+    const own = await create(alice, { companyName: "C1", role: "R" });
+    const bobsCompany = await findOrCreateCompany(db, bob, "C2");
+
+    await expect(
+      db.update(application).set({ companyId: bobsCompany.id }).where(eq(application.id, own.id)),
+    ).rejects.toThrow();
+  });
+
+  it("concurrent find-or-create yields one company", async () => {
+    const userId = await newUser();
+    const rows = await Promise.all(["Race", "race", "RACE ", " Race"].map((name) => findOrCreateCompany(db, userId, name)));
+
+    expect(new Set(rows.map((row) => row.id)).size).toBe(1);
+    expect(await listCompanies(db, userId)).toHaveLength(1);
   });
 });
