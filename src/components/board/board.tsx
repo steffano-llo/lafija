@@ -17,7 +17,7 @@ import {
 import { SortableContext, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import Link from "next/link";
-import { useId, useState, useTransition } from "react";
+import { useEffect, useId, useRef, useState, useTransition } from "react";
 import { moveApplicationAction } from "@/app/dashboard/board/actions";
 import { formatAppliedDate } from "@/components/applications/format";
 import type { BoardCard, BoardColumn } from "@/server/board";
@@ -33,6 +33,19 @@ function Card({ card }: { card: BoardCard }) {
     id: card.id,
     attributes: { roleDescription: "draggable card" },
   });
+  // dnd-kit stops the click that ends a drag from propagating but does not cancel it, so dropping
+  // a card grabbed by its link would follow the link. Swallow clicks until shortly after a drag ends.
+  const recentlyDragged = useRef(false);
+  useEffect(() => {
+    if (isDragging) {
+      recentlyDragged.current = true;
+      return;
+    }
+    const timer = setTimeout(() => {
+      recentlyDragged.current = false;
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [isDragging]);
 
   return (
     <li
@@ -52,6 +65,9 @@ function Card({ card }: { card: BoardCard }) {
         <Link
           href={`/dashboard/applications/${card.id}`}
           draggable={false}
+          onClick={(event) => {
+            if (recentlyDragged.current) event.preventDefault();
+          }}
           onKeyDown={(event) => event.stopPropagation()}
           aria-label={`Open ${cardName(card)}`}
           className="underline-offset-4 hover:underline"
