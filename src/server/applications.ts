@@ -4,9 +4,10 @@ import { and, asc, desc, eq, sql } from "drizzle-orm";
 import type { PgDatabase, PgQueryResultHKT } from "drizzle-orm/pg-core";
 import * as schema from "@/db/schema";
 import { application, company, stage } from "@/db/schema";
-import { parseApplicationInput, type FieldErrors } from "@/lib/validation/application";
+import { parseApplicationInput, parseNotesInput, type FieldErrors } from "@/lib/validation/application";
 import type { StageCategory } from "@/lib/validation/stage";
 import { bottomKey, rowsOf } from "./board";
+import { isId } from "./ids";
 import { ensureDefaultStages } from "./stages";
 
 /**
@@ -30,6 +31,7 @@ const applicationColumns = {
   source: application.source,
   salaryRange: application.salaryRange,
   appliedAt: application.appliedAt,
+  notes: application.notes,
   archived: application.archived,
   createdAt: application.createdAt,
   updatedAt: application.updatedAt,
@@ -48,6 +50,7 @@ export type Application = {
   source: string | null;
   salaryRange: string | null;
   appliedAt: string | null;
+  notes: string | null;
   archived: boolean;
   createdAt: Date;
   updatedAt: Date;
@@ -107,6 +110,7 @@ export async function listApplications(
 
 /** The user's application with this id, or null when it does not exist or belongs to someone else. */
 export async function getApplication(db: Db, userId: string, id: string): Promise<Application | null> {
+  if (!isId(id)) return null;
   const [row] = await db
     .select(applicationColumns)
     .from(application)
@@ -193,7 +197,8 @@ export async function createApplication(db: Db, userId: string, input: unknown):
  * Replaces the editable fields of the user's application. Ownership is checked first,
  * so a foreign or unknown id never creates a company for the caller. A missing `stageId`
  * keeps the current stage. A new stage puts the application at the bottom of that column and
- * appends a transition in the same statement as the update.
+ * appends a transition in the same statement as the update. A new company unlinks the contacts of
+ * the old one in that statement too.
  */
 export async function updateApplication(
   db: Db,
@@ -238,6 +243,13 @@ export async function updateApplication(
       select gen_random_uuid()::text, u."user_id", u."id", u."from_stage_id", u."to_stage_id"
       from "updated" u where u."from_stage_id" <> u."to_stage_id"
       returning "id"
+    ),
+    -- Contacts belong to a company: a new company drops the links to the old company's contacts.
+    -- Same statement, so the foreign keys (checked at its end) never see a link across companies.
+    "unlinked" as (
+      delete from "application_contact" ac using "updated" u
+      where ac."application_id" = u."id" and ac."user_id" = u."user_id" and ac."company_id" <> ${target.id}
+      returning ac."contact_id"
     )
     select "id" from "updated"
   `);
@@ -270,4 +282,33 @@ export async function setApplicationArchived(
     return current ? { ok: false, reason: "stage_archived" } : notFound;
   }
   return loaded(db, userId, id);
+}
+
+
+export type NotesResult =
+  | { ok: true; notes: string | null }
+  | { ok: false; reason: "invalid"; fieldErrors: { notes?: string[] } }
+  | { ok: false; reason: "not_found" };
+
+/** Replaces the free notes of the user's application; blank clears them. */
+export async function updateApplicationNotes(
+  db: Db,
+  userId: string,
+  id: string,
+  input: unknown,
+): Promise<NotesResult> {
+  if (!isId(id)) return notFound;
+  const parsed = parseNotesInput(input);
+  if (!parsed.success) {
+    // Unknown or foreign ids stay not_found whatever the input.
+    return (await getApplication(db, userId, id))
+      ? { ok: false, reason: "invalid", fieldErrors: parsed.fieldErrors }
+      : notFound;
+  }
+  const [row] = await db
+    .update(application)
+    .set({ notes: parsed.data.notes })
+    .where(and(eq(application.userId, userId), eq(application.id, id)))
+    .returning({ notes: application.notes });
+  return row ? { ok: true, notes: row.notes } : notFound;
 }

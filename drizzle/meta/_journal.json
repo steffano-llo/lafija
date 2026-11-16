@@ -29,6 +29,13 @@
       "when": 1794805540976,
       "tag": "0003_board",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1794808802097,
+      "tag": "0004_application_detail",
+      "breakpoints": true
     }
   ]
 }

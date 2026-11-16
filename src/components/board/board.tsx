@@ -16,6 +16,7 @@ import {
 } from "@dnd-kit/core";
 import { SortableContext, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
+import Link from "next/link";
 import { useId, useState, useTransition } from "react";
 import { moveApplicationAction } from "@/app/dashboard/board/actions";
 import { formatAppliedDate } from "@/components/applications/format";
@@ -45,7 +46,19 @@ function Card({ card }: { card: BoardCard }) {
       }`}
     >
       <p className="font-medium">{card.companyName}</p>
-      <p>{card.role}</p>
+      <p>
+        {/* Opens the detail page. Its own keys stay with the link, so Enter follows it instead of
+            picking up the card, and a click (no drag distance) never starts a drag. */}
+        <Link
+          href={`/dashboard/applications/${card.id}`}
+          draggable={false}
+          onKeyDown={(event) => event.stopPropagation()}
+          aria-label={`Open ${cardName(card)}`}
+          className="underline-offset-4 hover:underline"
+        >
+          {card.role}
+        </Link>
+      </p>
       <p className="text-xs text-muted-foreground">Applied {formatAppliedDate(card.appliedAt)}</p>
     </li>
   );

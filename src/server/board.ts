@@ -1,10 +1,12 @@
 import "server-only";
 
 import { and, asc, eq, sql, type SQL } from "drizzle-orm";
+import { alias } from "drizzle-orm/pg-core";
 import { application, company, stage, stageTransition } from "@/db/schema";
 import { parseMoveInput } from "@/lib/validation/board";
 import type { StageCategory } from "@/lib/validation/stage";
 import type { Db } from "./applications";
+import { isId } from "./ids";
 import { keyAfter, keyForIndex } from "./ordering";
 
 export type BoardCard = { id: string; companyName: string; role: string; appliedAt: string | null };
@@ -70,6 +72,54 @@ export async function listStageTransitions(db: Db, userId: string): Promise<Stag
     .from(stageTransition)
     .where(eq(stageTransition.userId, userId))
     .orderBy(asc(stageTransition.at), sql`${stageTransition.fromStageId} is not null`, asc(stageTransition.id));
+}
+
+export type HistoryEntry = {
+  id: string;
+  at: Date;
+  /** Null for the entry recorded when the application was created. */
+  fromStageName: string | null;
+  toStageName: string;
+  /** "Created in Applied" or "Applied → Screening". */
+  label: string;
+};
+
+export function historyLabel(fromStageName: string | null, toStageName: string): string {
+  return fromStageName === null ? `Created in ${toStageName}` : `${fromStageName} → ${toStageName}`;
+}
+
+const fromStage = alias(stage, "from_stage");
+const toStage = alias(stage, "to_stage");
+
+/**
+ * Stage history of the user's application, oldest first (same order as `listStageTransitions`),
+ * with current stage names; null when the application is unknown or someone else's.
+ */
+export async function listApplicationHistory(
+  db: Db,
+  userId: string,
+  applicationId: string,
+): Promise<HistoryEntry[] | null> {
+  if (!isId(applicationId)) return null;
+  const [own] = await db
+    .select({ id: application.id })
+    .from(application)
+    .where(and(eq(application.userId, userId), eq(application.id, applicationId)))
+    .limit(1);
+  if (!own) return null;
+  const rows = await db
+    .select({
+      id: stageTransition.id,
+      at: stageTransition.at,
+      fromStageName: fromStage.name,
+      toStageName: toStage.name,
+    })
+    .from(stageTransition)
+    .leftJoin(fromStage, eq(fromStage.id, stageTransition.fromStageId))
+    .innerJoin(toStage, eq(toStage.id, stageTransition.toStageId))
+    .where(and(eq(stageTransition.userId, userId), eq(stageTransition.applicationId, applicationId)))
+    .orderBy(asc(stageTransition.at), sql`${stageTransition.fromStageId} is not null`, asc(stageTransition.id));
+  return rows.map((row) => ({ ...row, label: historyLabel(row.fromStageName, row.toStageName) }));
 }
 
 /** Sorted keys of the user's non-archived applications in a stage, leaving one application out. */
@@ -151,3 +201,4 @@ export async function moveApplication(
     .limit(1);
   return { ok: false, reason: own ? "invalid" : "not_found" };
 }
+

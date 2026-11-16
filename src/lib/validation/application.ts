@@ -24,7 +24,7 @@ function isCalendarDate(value: string): boolean {
   return parsed.getUTCFullYear() === year && parsed.getUTCMonth() === month - 1 && parsed.getUTCDate() === day;
 }
 
-function isHttpUrl(value: string): boolean {
+export function isHttpUrl(value: string): boolean {
   if (!/^https?:\/\//i.test(value)) return false;
   try {
     const url = new URL(value);
@@ -43,7 +43,7 @@ function requiredText(label: string, max: number) {
 }
 
 /** Optional text: trimmed, and blank or missing becomes null. */
-function optionalText(schema: z.ZodType<string>) {
+export function optionalText(schema: z.ZodType<string>) {
   return z.preprocess(
     (value) => {
       if (value === undefined || value === null) return null;
@@ -98,6 +98,23 @@ export function parseApplicationInput(
   input: unknown,
 ): { success: true; data: ApplicationInput } | { success: false; fieldErrors: FieldErrors } {
   const result = applicationInputSchema.safeParse(input ?? {});
+  if (result.success) return { success: true, data: result.data };
+  return { success: false, fieldErrors: z.flattenError(result.error).fieldErrors };
+}
+
+export const NOTES_MAX = 10_000;
+
+/** Free notes on an application: optional text (blank clears them), at most `NOTES_MAX` characters. */
+export const notesInputSchema = z.object({
+  notes: optionalText(
+    z.string({ error: "Enter valid notes." }).max(NOTES_MAX, `Notes must be at most ${NOTES_MAX} characters.`),
+  ),
+});
+
+export function parseNotesInput(
+  input: unknown,
+): { success: true; data: { notes: string | null } } | { success: false; fieldErrors: { notes?: string[] } } {
+  const result = notesInputSchema.safeParse(input ?? {});
   if (result.success) return { success: true, data: result.data };
   return { success: false, fieldErrors: z.flattenError(result.error).fieldErrors };
 }

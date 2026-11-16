@@ -7,12 +7,14 @@ import {
   integer,
   pgEnum,
   pgTable,
+  primaryKey,
   text,
   timestamp,
   unique,
   uniqueIndex,
 } from "drizzle-orm/pg-core";
 // Relative import: drizzle-kit loads this file without the `@/` path alias.
+import { INTERVIEW_OUTCOMES, INTERVIEW_TYPES } from "../lib/validation/interview";
 import { STAGE_CATEGORIES } from "../lib/validation/stage";
 
 // Better Auth core tables (better-auth 1.7). Model keys must stay
@@ -154,6 +156,8 @@ export const application = pgTable(
     source: text("source"),
     salaryRange: text("salary_range"),
     appliedAt: date("applied_at", { mode: "string" }),
+    // Free notes shown and edited on the detail page.
+    notes: text("notes"),
     archived: boolean("archived").notNull().default(false),
     // Board order within the stage: a fractional-indexing key compared with collate "C"
     // (the migration declares the column that way; queries also say it explicitly).
@@ -168,6 +172,8 @@ export const application = pgTable(
     index("application_user_id_idx").on(table.userId),
     // Target of the composite foreign key from stage_transition.
     unique("application_id_user_id_unique").on(table.id, table.userId),
+    // Target of the composite foreign key from application_contact (same company and user).
+    unique("application_id_company_id_user_id_unique").on(table.id, table.companyId, table.userId),
     // The company must belong to the same user as the application.
     foreignKey({
       name: "application_company_id_user_id_fk",
@@ -226,5 +232,109 @@ export const stageTransition = pgTable(
     index("stage_transition_application_id_idx").on(table.applicationId, table.at),
     index("stage_transition_from_stage_id_idx").on(table.fromStageId),
     index("stage_transition_to_stage_id_idx").on(table.toStageId),
+  ],
+);
+
+export const interviewType = pgEnum("interview_type", INTERVIEW_TYPES);
+export const interviewOutcome = pgEnum("interview_outcome", INTERVIEW_OUTCOMES);
+
+/** An interview of one application; deleted with it. */
+export const interview = pgTable(
+  "interview",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => crypto.randomUUID()),
+    userId: text("user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    applicationId: text("application_id").notNull(),
+    scheduledAt: timestamp("scheduled_at", { withTimezone: true }).notNull(),
+    type: interviewType("type").notNull(),
+    notes: text("notes"),
+    outcome: interviewOutcome("outcome").notNull().default("pending"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow()
+      .$onUpdate(() => new Date()),
+  },
+  (table) => [
+    // The application must belong to the same user as the interview.
+    foreignKey({
+      name: "interview_application_id_user_id_fk",
+      columns: [table.applicationId, table.userId],
+      foreignColumns: [application.id, application.userId],
+    }).onDelete("cascade"),
+    index("interview_application_id_scheduled_at_idx").on(table.applicationId, table.scheduledAt),
+    index("interview_user_id_idx").on(table.userId),
+  ],
+);
+
+/** A person at a company; linked to any of that company's applications. Deleted with the company. */
+export const contact = pgTable(
+  "contact",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => crypto.randomUUID()),
+    userId: text("user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    companyId: text("company_id").notNull(),
+    name: text("name").notNull(),
+    role: text("role"),
+    email: text("email"),
+    linkedin: text("linkedin"),
+    notes: text("notes"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow()
+      .$onUpdate(() => new Date()),
+  },
+  (table) => [
+    // The company must belong to the same user as the contact.
+    foreignKey({
+      name: "contact_company_id_user_id_fk",
+      columns: [table.companyId, table.userId],
+      foreignColumns: [company.id, company.userId],
+    }).onDelete("cascade"),
+    // Target of the composite foreign key from application_contact (same company and user).
+    unique("contact_id_company_id_user_id_unique").on(table.id, table.companyId, table.userId),
+    index("contact_company_id_idx").on(table.companyId),
+    index("contact_user_id_idx").on(table.userId),
+  ],
+);
+
+/**
+ * Which contacts are linked to which applications. Both foreign keys include `company_id` and
+ * `user_id`, so the database itself only accepts a contact and an application of the same company
+ * and user. Deleting either side removes the link.
+ */
+export const applicationContact = pgTable(
+  "application_contact",
+  {
+    applicationId: text("application_id").notNull(),
+    contactId: text("contact_id").notNull(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    companyId: text("company_id").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    primaryKey({ name: "application_contact_pk", columns: [table.applicationId, table.contactId] }),
+    foreignKey({
+      name: "application_contact_application_fk",
+      columns: [table.applicationId, table.companyId, table.userId],
+      foreignColumns: [application.id, application.companyId, application.userId],
+    }).onDelete("cascade"),
+    foreignKey({
+      name: "application_contact_contact_fk",
+      columns: [table.contactId, table.companyId, table.userId],
+      foreignColumns: [contact.id, contact.companyId, contact.userId],
+    }).onDelete("cascade"),
+    index("application_contact_contact_id_idx").on(table.contactId),
   ],
 );

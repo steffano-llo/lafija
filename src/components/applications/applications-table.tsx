@@ -53,6 +53,13 @@ export function ApplicationsTable({ applications, archived }: { applications: Ap
               <td className="px-3 py-2">
                 <div className="flex items-start justify-end gap-2">
                   <Link
+                    href={`/dashboard/applications/${item.id}`}
+                    className={buttonVariants({ variant: "outline", size: "sm" })}
+                    aria-label={`View ${item.role} at ${item.companyName}`}
+                  >
+                    View
+                  </Link>
+                  <Link
                     href={`/dashboard/applications/${item.id}/edit`}
                     className={buttonVariants({ variant: "outline", size: "sm" })}
                     aria-label={`Edit ${item.role} at ${item.companyName}`}
