@@ -1,6 +1,7 @@
 import { sql } from "drizzle-orm";
 import {
   boolean,
+  check,
   date,
   foreignKey,
   index,
@@ -15,6 +16,7 @@ import {
 } from "drizzle-orm/pg-core";
 // Relative import: drizzle-kit loads this file without the `@/` path alias.
 import { INTERVIEW_OUTCOMES, INTERVIEW_TYPES } from "../lib/validation/interview";
+import { FOLLOW_UP_DAYS_DEFAULT, FOLLOW_UP_DAYS_MAX, FOLLOW_UP_DAYS_MIN, REMINDER_KINDS } from "../lib/validation/reminder";
 import { STAGE_CATEGORIES } from "../lib/validation/stage";
 
 // Better Auth core tables (better-auth 1.7). Model keys must stay
@@ -232,6 +234,8 @@ export const stageTransition = pgTable(
     index("stage_transition_application_id_idx").on(table.applicationId, table.at),
     index("stage_transition_from_stage_id_idx").on(table.fromStageId),
     index("stage_transition_to_stage_id_idx").on(table.toStageId),
+    // Target of the composite foreign key from reminder.
+    unique("stage_transition_id_user_id_unique").on(table.id, table.userId),
   ],
 );
 
@@ -336,5 +340,87 @@ export const applicationContact = pgTable(
       foreignColumns: [contact.id, contact.companyId, contact.userId],
     }).onDelete("cascade"),
     index("application_contact_contact_id_idx").on(table.contactId),
+  ],
+);
+
+export const reminderKind = pgEnum("reminder_kind", REMINDER_KINDS);
+
+/**
+ * A reminder about one application, deleted with it. `manual` ones are written by the user;
+ * `follow_up` ones are created in the same statement as a transition into an active-category stage
+ * (one per transition) and closed (`done_at`) by the next transition or by archiving.
+ * `sent_at` is set once the reminder has been emailed (T8).
+ */
+export const reminder = pgTable(
+  "reminder",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => crypto.randomUUID()),
+    userId: text("user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    applicationId: text("application_id").notNull(),
+    kind: reminderKind("kind").notNull(),
+    dueAt: timestamp("due_at", { withTimezone: true }).notNull(),
+    message: text("message").notNull(),
+    // The transition a follow-up reminder was created for; null for manual reminders.
+    transitionId: text("transition_id"),
+    sentAt: timestamp("sent_at", { withTimezone: true }),
+    doneAt: timestamp("done_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow()
+      .$onUpdate(() => new Date()),
+  },
+  (table) => [
+    foreignKey({
+      name: "reminder_application_id_user_id_fk",
+      columns: [table.applicationId, table.userId],
+      foreignColumns: [application.id, application.userId],
+    }).onDelete("cascade"),
+    foreignKey({
+      name: "reminder_transition_id_user_id_fk",
+      columns: [table.transitionId, table.userId],
+      foreignColumns: [stageTransition.id, stageTransition.userId],
+    }).onDelete("cascade"),
+    // Follow-ups always point at their transition; manual reminders never do.
+    check("reminder_kind_transition_check", sql`(${table.kind} = 'follow_up') = (${table.transitionId} is not null)`),
+    check("reminder_message_length_check", sql`char_length(${table.message}) between 1 and 500`),
+    // One follow-up per transition, and at most one open follow-up per application.
+    uniqueIndex("reminder_follow_up_transition_idx").on(table.transitionId).where(sql`${table.kind} = 'follow_up'`),
+    uniqueIndex("reminder_open_follow_up_idx")
+      .on(table.applicationId)
+      .where(sql`${table.kind} = 'follow_up' and ${table.doneAt} is null`),
+    // Due and not done, per user (in-app notifications and the reminders page).
+    index("reminder_user_id_due_at_open_idx").on(table.userId, table.dueAt).where(sql`${table.doneAt} is null`),
+    // Due and not yet sent (the email scheduler).
+    index("reminder_due_at_unsent_idx").on(table.dueAt).where(sql`${table.sentAt} is null and ${table.doneAt} is null`),
+    index("reminder_application_id_idx").on(table.applicationId),
+    index("reminder_user_id_done_at_idx").on(table.userId, table.doneAt),
+  ],
+);
+
+/** Per-user preferences; a missing row means the defaults. */
+export const userSettings = pgTable(
+  "user_settings",
+  {
+    userId: text("user_id")
+      .primaryKey()
+      .references(() => user.id, { onDelete: "cascade" }),
+    // Days after a move into an active stage before the follow-up is due; null turns them off.
+    followUpDays: integer("follow_up_days").default(FOLLOW_UP_DAYS_DEFAULT),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow()
+      .$onUpdate(() => new Date()),
+  },
+  (table) => [
+    check(
+      "user_settings_follow_up_days_check",
+      sql`${table.followUpDays} is null or ${table.followUpDays} between ${sql.raw(String(FOLLOW_UP_DAYS_MIN))} and ${sql.raw(String(FOLLOW_UP_DAYS_MAX))}`,
+    ),
   ],
 );

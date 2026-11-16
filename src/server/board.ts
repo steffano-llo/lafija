@@ -8,6 +8,7 @@ import type { StageCategory } from "@/lib/validation/stage";
 import type { Db } from "./applications";
 import { isId } from "./ids";
 import { keyAfter, keyForIndex } from "./ordering";
+import { followUpCtes } from "./reminders";
 
 export type BoardCard = { id: string; companyName: string; role: string; appliedAt: string | null };
 
@@ -156,7 +157,9 @@ export async function bottomKey(db: Db, userId: string, stageId: string): Promis
 /**
  * Moves the user's non-archived application to `index` in the column of `stageId` (a non-archived
  * stage of the same user). A change of stage appends a transition in the same statement as the
- * update, so one never happens without the other; a reorder within the column records nothing.
+ * update, so one never happens without the other, and replaces the automatic follow-up reminder
+ * (see `followUpCtes`) in that statement too; a reorder within the column records nothing and
+ * leaves reminders alone.
  */
 export async function moveApplication(
   db: Db,
@@ -188,8 +191,9 @@ export async function moveApplication(
       insert into "stage_transition" ("id", "user_id", "application_id", "from_stage_id", "to_stage_id")
       select gen_random_uuid()::text, m."user_id", m."id", m."from_stage_id", m."to_stage_id"
       from "moved" m where m."from_stage_id" <> m."to_stage_id"
-      returning "id"
-    )
+      returning "id", "user_id", "application_id", "to_stage_id", "at"
+    ),
+    ${followUpCtes(null)}
     select "id" from "moved"
   `);
   if (rowsOf<{ id: string }>(result).length > 0) return { ok: true };

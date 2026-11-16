@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { Suspense } from "react";
+import { DashboardHeader } from "@/components/reminders/dashboard-header";
 import { ApplicationForm } from "@/components/applications/application-form";
 import { getDb } from "@/db";
 import { requireUser } from "@/lib/session";
@@ -50,16 +51,19 @@ async function EditApplicationForm({ params }: { params: Params }) {
 
 export default function EditApplicationPage({ params }: PageProps<"/dashboard/applications/[id]/edit">) {
   return (
-    <main className="mx-auto flex w-full max-w-4xl flex-1 flex-col gap-6 px-6 py-12">
-      <div className="flex flex-col gap-1">
-        <Link href="/dashboard/applications" className="text-sm text-muted-foreground hover:underline">
-          ← Applications
-        </Link>
-        <h1 className="text-2xl font-semibold">Edit application</h1>
-      </div>
-      <Suspense fallback={<p className="text-muted-foreground">Loading…</p>}>
-        <EditApplicationForm params={params} />
-      </Suspense>
-    </main>
+    <>
+      <DashboardHeader />
+      <main className="mx-auto flex w-full max-w-4xl flex-1 flex-col gap-6 px-6 py-12">
+        <div className="flex flex-col gap-1">
+          <Link href="/dashboard/applications" className="text-sm text-muted-foreground hover:underline">
+            ← Applications
+          </Link>
+          <h1 className="text-2xl font-semibold">Edit application</h1>
+        </div>
+        <Suspense fallback={<p className="text-muted-foreground">Loading…</p>}>
+          <EditApplicationForm params={params} />
+        </Suspense>
+      </main>
+    </>
   );
 }
