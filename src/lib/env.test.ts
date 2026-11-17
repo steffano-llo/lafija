@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { parseEmailEnv, parseEnv, parseRecipientAllowlist } from "./env";
+import { parseEmailEnv, parseEnv, parseQStashEnv, parseRecipientAllowlist } from "./env";
 
 const valid = {
   DATABASE_URL: "postgresql://user:pass@host.neon.tech/lafija?sslmode=require",
@@ -210,5 +210,33 @@ describe("parseRecipientAllowlist", () => {
 
   it("returns null when an entry is not an address", () => {
     expect(parseRecipientAllowlist("owner@example.com, nope")).toBeNull();
+  });
+});
+
+describe("parseQStashEnv (T10 cleanup cron)", () => {
+  it("needs only the two QStash signing keys, independent of the email group", () => {
+    expect(
+      parseQStashEnv({ QSTASH_CURRENT_SIGNING_KEY: "cur", QSTASH_NEXT_SIGNING_KEY: "next" }, "https://lafija.vercel.app/"),
+    ).toEqual({
+      currentSigningKey: "cur",
+      nextSigningKey: "next",
+      cleanupUrl: "https://lafija.vercel.app/api/cron/cleanup",
+    });
+    // A malformed email variable does not disable the cleanup.
+    expect(
+      parseQStashEnv(
+        { QSTASH_CURRENT_SIGNING_KEY: "cur", QSTASH_NEXT_SIGNING_KEY: "next", RESEND_API_KEY: "bad" },
+        "https://lafija.vercel.app",
+      ),
+    ).not.toBeNull();
+  });
+
+  it.each([
+    ["both missing", {}],
+    ["one missing", { QSTASH_CURRENT_SIGNING_KEY: "cur" }],
+    ["one empty", { QSTASH_CURRENT_SIGNING_KEY: "cur", QSTASH_NEXT_SIGNING_KEY: "" }],
+    ["one with spaces", { QSTASH_CURRENT_SIGNING_KEY: "cur", QSTASH_NEXT_SIGNING_KEY: "a b" }],
+  ])("returns null when %s", (_label, raw) => {
+    expect(parseQStashEnv(raw, "https://lafija.vercel.app")).toBeNull();
   });
 });

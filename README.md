@@ -30,8 +30,8 @@ Create a `.env.local` file in the project root (it is git-ignored) with:
 | `BETTER_AUTH_URL` | yes | Public base URL of the app, e.g. `http://localhost:3000` locally. |
 | `GOOGLE_CLIENT_ID` | yes | OAuth client ID from Google Cloud (see below). |
 | `GOOGLE_CLIENT_SECRET` | yes | OAuth client secret from Google Cloud. |
-| `QSTASH_CURRENT_SIGNING_KEY` | no (email) | QStash current signing key (Upstash console → QStash → *Signing keys*). |
-| `QSTASH_NEXT_SIGNING_KEY` | no (email) | QStash next signing key (same page); both are needed so key rotation keeps working. |
+| `QSTASH_CURRENT_SIGNING_KEY` | no (email, demo cleanup) | QStash current signing key (Upstash console → QStash → *Signing keys*). |
+| `QSTASH_NEXT_SIGNING_KEY` | no (email, demo cleanup) | QStash next signing key (same page); both are needed so key rotation keeps working. The demo cleanup endpoint needs only these two keys. |
 | `RESEND_API_KEY` | no (email) | Resend API key, starts with `re_`. |
 | `EMAIL_FROM` | no (email) | Sender, `address` or `Name <address>`, e.g. `laFija <onboarding@resend.dev>` (works without a domain). |
 | `EMAIL_ALLOWED_RECIPIENTS` | no | Comma-separated addresses that may receive reminder and verification emails, compared ignoring case, e.g. `you@example.com`. Unset or empty: **nobody** gets email. `*` allows every address; use it only with a verified sending domain. Listing an address never bypasses email verification. |
@@ -61,6 +61,17 @@ How it works:
 - **Snoozing**, or editing the due time to another minute, clears `sent_at` and any lease (`email_claimed_at`), so the reminder is emailed again when it falls due at its new time. Marking a reminder done before it is due means it is never emailed.
 
 Then create the tables: `npm run db:migrate`.
+
+### Demo accounts ("Try the demo")
+
+The home page and the sign-in page have a **Try the demo** button (S6). One click creates a temporary account `demo-<random>@demo.lafija.invalid` with a random password, fills it with a sample search and opens its board, signed in. Every dashboard page then shows "You're exploring a demo. Everything is deleted 24 hours after it was created." with the time left and a **Create a real account** link.
+
+- **Sample data** (`src/server/demo-seed.ts`, one transaction, fixed content, dates relative to the moment of creation): the default stages plus **Wishlist** (first, category `wishlist`) and **Withdrawn** (last, category `withdrawn`); 20 applications over the last ~10 weeks with backdated stage history (2 in Wishlist, 6 Applied, 2 Screening, 2 Interview, 1 Offer, 5 Rejected, 1 Accepted, 1 Withdrawn), sources from the presets, salaries with currency, 12 interviews (past ones with an outcome, two upcoming pending), 5 contacts linked to their applications, an open follow-up for every application in an active stage (6 already due) and 3 manual reminders (one due, one upcoming, one done).
+- **No email, ever** (S23): the verification sender returns before sending for a demo address (sign-up and the resend button, which answers "Demo accounts do not get email."), the reminder digest SQL excludes users with a `demo_account` row and any address with the demo domain (even with `EMAIL_ALLOWED_RECIPIENTS=*` and a verified address), the verification banner is hidden and **Settings → Email** says "Email reminders are unavailable for demo accounts." `.invalid` is a reserved top-level domain (RFC 2606), so the address is undeliverable anyway.
+- **Abuse limits**: (1) at most **200 live demo accounts** at a time (`DEMO_ACCOUNT_LIMIT` in `src/lib/validation/demo.ts`); above it the button answers "Too many people are trying the demo right now. Please try again later, or create a free account." and nothing is written. The cap is checked before the sign-up and again, under a transaction-scoped advisory lock, when the demo row is inserted (a sign-up that loses that race is deleted again). (2) **Better Auth rate limiting**: the demo sign-up goes through Better Auth's HTTP handler (`POST /api/auth/sign-up/email`) with the visitor's `x-forwarded-for`, so its built-in rule for sign-up (3 requests per 10 seconds per IP) applies ("Too many demo requests from your network. Please wait a few seconds and try again."). Better Auth enables rate limiting in production only, with in-memory storage per server instance (shared storage for serverless is T11).
+- **Safety of the cleanup** (S23): `demo_account` (`user_id`, `email`, `created_at`, `expires_at`) has a foreign key on (`user_id`, `email`) → `user`(`id`, `email`) with `ON DELETE CASCADE ON UPDATE CASCADE`, and checks that `email LIKE '%@demo.lafija.invalid'` (lower case) and that `expires_at = created_at + 24 hours`. So the database refuses a demo row for any real account, refuses changing a demo user's address to a real one (the cascaded address fails the check) and refuses extending a demo. The cleanup deletes, in **one statement**, users that have a `demo_account` row with `expires_at < now` **and** an address with the demo domain, at most 500 per run, oldest first; foreign keys cascade to all of their data. A real account with a crafted demo-domain address but no demo row is never deleted. `src/server/demo-safety.test.ts` proves it: every real user's rows in every table are byte-identical before and after.
+- **Cleanup schedule**: QStash (Upstash console → QStash → *Schedules*): destination `https://<deployed-url>/api/cron/cleanup`, method **POST**, cron `0 * * * *` (**hourly**), empty body. The URL must be exactly `BETTER_AUTH_URL` + `/api/cron/cleanup`. It needs only `QSTASH_CURRENT_SIGNING_KEY` and `QSTASH_NEXT_SIGNING_KEY` (not the email variables): without them it answers **503**; a missing or invalid signature is **401** before the database is touched; only POST is exported (**405** otherwise). It answers counts only, e.g. `{"deleted":3}`. Locally, run `npm run demo:cleanup -- --env-file <your local env file>`.
+- Migration `0011_demo_accounts` adds `demo_account` and a unique (`id`, `email`) on `user` (no data changes). Apply it with `npm run db:migrate`.
 
 ### Google sign-in
 
@@ -182,3 +193,4 @@ Pages: `/dashboard/board` (main view), `/dashboard/applications` (active list, `
 | `npm run db:migrate` | Apply pending migrations to `DATABASE_URL` |
 | `npm run db:studio` | Browse the database with Drizzle Studio |
 | `npm run reminders:send` | Run the reminder email job once against `DATABASE_URL` with the real Resend key (add `-- --env-file <file>` to load variables from a file); prints the summary only |
+| `npm run demo:cleanup` | Delete expired demo accounts once against `DATABASE_URL` (add `-- --env-file <file>` to load variables from a file); prints the count only, e.g. `{"deleted":3}` |

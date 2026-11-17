@@ -5,6 +5,7 @@ import { sql, type SQL } from "drizzle-orm";
 import { buildDigestEmail, type DigestItem } from "@/lib/email/digest";
 import type { ReminderMailer, SendResult } from "@/lib/email/types";
 import type { RecipientAllowlist } from "@/lib/env";
+import { DEMO_EMAIL_LIKE } from "@/lib/validation/demo";
 import type { Db } from "./applications";
 import { rowsOf } from "./board";
 
@@ -40,13 +41,17 @@ type ClaimedRow = {
  * says so), the switch in the settings row `us` is on (no row = on), and the allowlist has `*` or
  * the address (any case). Listing an address never bypasses verification. Same rule as
  * `reminderEmailProblems` in `src/lib/email/eligibility.ts`, which Settings explains.
+ * Demo users are never emailed (S23): neither a user with a `demo_account` row nor any address with
+ * the demo domain, even with `*` (checked case-insensitively).
  */
 function recipientSql(recipients: RecipientAllowlist): SQL {
   const addresses = JSON.stringify(recipients.addresses.map((address) => address.trim().toLowerCase()));
   const allowed = recipients.everyone
     ? sql`true`
     : sql`lower(u."email") in (select jsonb_array_elements_text(${addresses}::jsonb))`;
-  return sql`(u."email_verified" and coalesce(us."email_reminders", true) and ${allowed})`;
+  const notDemo = sql`(lower(u."email") not like ${DEMO_EMAIL_LIKE}
+    and not exists (select 1 from "demo_account" d where d."user_id" = u."id"))`;
+  return sql`(u."email_verified" and coalesce(us."email_reminders", true) and ${allowed} and ${notDemo})`;
 }
 
 /** Due, open, unsent reminders of non-archived applications, before deciding who may get email. */

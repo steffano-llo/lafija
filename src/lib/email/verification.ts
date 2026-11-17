@@ -3,6 +3,7 @@ import { APIError, isAPIError } from "better-auth/api";
 import { userSettings } from "@/db/schema";
 import type { Auth } from "@/lib/auth";
 import type { EmailState, RecipientAllowlist } from "@/lib/env";
+import { isDemoEmail } from "@/lib/validation/demo";
 import type { Db } from "@/server/applications";
 import { escapeHtml } from "./digest";
 import { isAddressAllowed, verificationBlockerMessage, verificationEmailBlocker } from "./eligibility";
@@ -82,14 +83,15 @@ async function safeSend(sender: EmailSender, email: Parameters<EmailSender["send
 /**
  * Better Auth `emailVerification.sendVerificationEmail`, used on sign-up (and for a new Google user
  * whose address Google has not verified) and by `resendVerificationEmail`. Without delivery, or for
- * an address the allowlist does not include, it sends nothing (Resend is never called). Otherwise it
+ * an address the allowlist does not include, and always for a demo address (S23), it sends nothing
+ * (Resend is never called). Otherwise it
  * starts the 60-second cooldown (refusing with `VERIFICATION_EMAIL_COOLDOWN` while it runs) and
  * sends the link through the same sender and `EMAIL_FROM` as reminder emails. The link lands on
  * `/verify-email`, whatever callback URL the client sent.
  */
 export function createSendVerificationEmail(db: Db, delivery: VerificationDelivery) {
   return async ({ user, url }: { user: { id: string; email: string }; url: string }): Promise<void> => {
-    if (!delivery || !isAddressAllowed(delivery.recipients, user.email)) return;
+    if (isDemoEmail(user.email) || !delivery || !isAddressAllowed(delivery.recipients, user.email)) return;
     const link = new URL(url);
     link.searchParams.set("callbackURL", VERIFY_EMAIL_CALLBACK);
     const now = new Date();
@@ -119,7 +121,8 @@ export type ResendResult = { ok: boolean; message: string };
 
 /**
  * The "Resend verification email" button: always the signed-in user's own address (Better Auth
- * refuses another one with EMAIL_MISMATCH, and its HTTP endpoint is disabled). Says plainly why
+ * refuses another one with EMAIL_MISMATCH, and its HTTP endpoint is disabled). Demo accounts are
+ * refused before anything else (S23). Says plainly why
  * nothing is sent when delivery is unavailable or the address is not allowed, without calling
  * the sender.
  */
@@ -127,6 +130,7 @@ export async function resendVerificationEmail(auth: Auth, headers: Headers, stat
   const session = await auth.api.getSession({ headers });
   if (!session) return { ok: false, message: "Your session has ended. Sign in again." };
   const { email, emailVerified } = session.user;
+  if (isDemoEmail(email)) return { ok: false, message: "Demo accounts do not get email." };
   if (emailVerified) return { ok: false, message: "Your email address is already verified." };
   const blocker = verificationEmailBlocker(state, email);
   if (blocker) return { ok: false, message: verificationBlockerMessage(blocker) };

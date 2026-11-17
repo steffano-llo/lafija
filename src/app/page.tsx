@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { TryDemoButton } from "@/components/demo/try-demo-button";
 import { buttonVariants } from "@/components/ui/button";
 
 export default function Home() {
@@ -17,6 +18,7 @@ export default function Home() {
           Create account
         </Link>
       </div>
+      <TryDemoButton size="lg" />
     </main>
   );
 }

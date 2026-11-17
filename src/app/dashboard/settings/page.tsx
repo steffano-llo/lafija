@@ -9,6 +9,7 @@ import { emailProblemMessage, reminderEmailProblems } from "@/lib/email/eligibil
 import { getEmailState } from "@/lib/env";
 import { requireUser } from "@/lib/session";
 import { CURRENCIES, FALLBACK_TIME_ZONE } from "@/lib/validation/settings";
+import { getDemoAccount } from "@/server/demo";
 import { getEmailReminders, getUserSettings, listTimeZones } from "@/server/settings";
 import { setDefaultCurrencyAction, setEmailRemindersAction, setTimeZoneAction } from "./actions";
 
@@ -45,10 +46,11 @@ function EmailDeliveryStatus({ email, problems }: { email: string; problems: Ret
 async function SettingsForms() {
   const user = await requireUser();
   const db = getDb();
-  const [settings, zones, emailReminders] = await Promise.all([
+  const [settings, zones, emailReminders, demo] = await Promise.all([
     getUserSettings(db, user.id),
     listTimeZones(db),
     getEmailReminders(db, user.id),
+    getDemoAccount(db, user.id),
   ]);
 
   return (
@@ -90,7 +92,8 @@ async function SettingsForms() {
         <h2 id="email-heading" className="text-lg font-semibold">
           Email
         </h2>
-        <EmailRemindersForm enabled={emailReminders} action={setEmailRemindersAction} />
+        {/* Demo accounts never get email (S23): no switch, only the explanation. */}
+        {!demo && <EmailRemindersForm enabled={emailReminders} action={setEmailRemindersAction} />}
         <EmailDeliveryStatus
           email={user.email}
           problems={reminderEmailProblems({
@@ -98,6 +101,7 @@ async function SettingsForms() {
             email: user.email,
             emailVerified: user.emailVerified,
             emailReminders,
+            isDemo: demo !== null,
           })}
         />
       </section>

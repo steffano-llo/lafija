@@ -19,14 +19,20 @@ export interface AuthConfig {
   google: { clientId: string; clientSecret: string };
   /** How verification emails are sent; omitted or null when email delivery is unavailable. */
   emailDelivery?: VerificationDelivery;
+  /**
+   * Better Auth rate limiting; omitted = its default (on in production only, 100 requests per 10 s,
+   * 3 per 10 s on /sign-in and /sign-up). Tests turn it on to prove the demo goes through it.
+   */
+  rateLimit?: { enabled: boolean };
 }
 
 /** Builds the Better Auth instance. Tests pass an isolated database; the app uses `getAuth()`. */
-export function createAuth({ db, secret, baseURL, google, emailDelivery = null }: AuthConfig) {
+export function createAuth({ db, secret, baseURL, google, emailDelivery = null, rateLimit }: AuthConfig) {
   return betterAuth({
     database: drizzleAdapter(db, { provider: "pg", schema }),
     secret,
     baseURL,
+    ...(rateLimit ? { rateLimit } : {}),
     emailAndPassword: {
       enabled: true,
       minPasswordLength: 8,
@@ -35,6 +41,7 @@ export function createAuth({ db, secret, baseURL, google, emailDelivery = null }
     },
     emailVerification: {
       // Sign-up sends the link (sign-up.mjs:247-260; a failure is logged and sign-up still succeeds).
+      // Demo sign-ups go through the same path; the sender returns before sending for them (S23).
       sendOnSignUp: true,
       sendOnSignIn: false,
       autoSignInAfterVerification: false,

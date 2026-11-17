@@ -2,11 +2,14 @@ import Link from "next/link";
 import { Suspense } from "react";
 import { resendVerificationEmailAction } from "@/app/dashboard/verification-actions";
 import { ResendVerificationButton } from "@/components/auth/resend-verification-button";
+import { formatTimeLeft } from "@/components/demo/format";
 import { getDb } from "@/db";
 import { verificationBlockerMessage, verificationEmailBlocker } from "@/lib/email/eligibility";
 import { getEmailState } from "@/lib/env";
+import { isDemoEmail } from "@/lib/validation/demo";
 import { requireUser } from "@/lib/session";
 import { TimeZoneDetector } from "@/components/settings/time-zone-detector";
+import { getDemoAccount } from "@/server/demo";
 import { countDueReminders } from "@/server/reminders";
 import { getUserSettings } from "@/server/settings";
 
@@ -46,7 +49,8 @@ async function TimeZoneCheck() {
  */
 async function VerificationBanner() {
   const user = await requireUser();
-  if (user.emailVerified) return null;
+  // Demo accounts never get email (S23), so there is nothing to verify.
+  if (user.emailVerified || isDemoEmail(user.email)) return null;
   const blocker = verificationEmailBlocker(getEmailState(), user.email);
   return (
     <div
@@ -64,9 +68,31 @@ async function VerificationBanner() {
   );
 }
 
+/** Shown to demo accounts (S6): what happens to the data, how long is left, and the way out. */
+async function DemoBanner() {
+  const user = await requireUser();
+  const demo = await getDemoAccount(getDb(), user.id);
+  if (!demo) return null;
+  return (
+    <div
+      role="region"
+      aria-label="Demo account"
+      className="flex flex-wrap items-center gap-x-3 gap-y-1 border-t bg-amber-50 px-6 py-2 text-sm text-amber-950 dark:bg-amber-950/40 dark:text-amber-100"
+    >
+      <p>
+        You&apos;re exploring a demo. Everything is deleted 24 hours after it was created.{" "}
+        <span className="font-medium">{formatTimeLeft(demo.msLeft)}.</span>
+      </p>
+      <Link href="/sign-up" className="font-medium underline underline-offset-4">
+        Create a real account
+      </Link>
+    </div>
+  );
+}
+
 /**
- * Bar at the top of every dashboard page with the number of due reminders and, for unverified
- * addresses, the verification banner. Rendered by each page, not a layout, so it is fresh on every
+ * Bar at the top of every dashboard page with the number of due reminders, the demo banner for demo
+ * accounts and, for unverified real addresses, the verification banner. Rendered by each page, not a layout, so it is fresh on every
  * navigation (layouts are kept across navigations).
  */
 export function DashboardHeader() {
@@ -89,6 +115,9 @@ export function DashboardHeader() {
           <TimeZoneCheck />
         </Suspense>
       </div>
+      <Suspense fallback={null}>
+        <DemoBanner />
+      </Suspense>
       <Suspense fallback={null}>
         <VerificationBanner />
       </Suspense>

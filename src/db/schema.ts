@@ -17,21 +17,27 @@ import {
 // Relative import: drizzle-kit loads this file without the `@/` path alias.
 import { INTERVIEW_OUTCOMES, INTERVIEW_TYPES } from "../lib/validation/interview";
 import { FOLLOW_UP_DAYS_DEFAULT, FOLLOW_UP_DAYS_MAX, FOLLOW_UP_DAYS_MIN, REMINDER_KINDS } from "../lib/validation/reminder";
+import { DEMO_EMAIL_LIKE, DEMO_LIFETIME_HOURS } from "../lib/validation/demo";
 import { DEFAULT_CURRENCY } from "../lib/validation/settings";
 import { STAGE_CATEGORIES } from "../lib/validation/stage";
 
 // Better Auth core tables (better-auth 1.7). Model keys must stay
 // `user`, `session`, `account` and `verification` for the Drizzle adapter.
 
-export const user = pgTable("user", {
-  id: text("id").primaryKey(),
-  name: text("name").notNull(),
-  email: text("email").notNull().unique(),
-  emailVerified: boolean("email_verified").notNull().default(false),
-  image: text("image"),
-  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
-});
+export const user = pgTable(
+  "user",
+  {
+    id: text("id").primaryKey(),
+    name: text("name").notNull(),
+    email: text("email").notNull().unique(),
+    emailVerified: boolean("email_verified").notNull().default(false),
+    image: text("image"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  // Target of the composite foreign key from demo_account.
+  (table) => [unique("user_id_email_unique").on(table.id, table.email)],
+);
 
 export const session = pgTable(
   "session",
@@ -414,6 +420,42 @@ export const reminder = pgTable(
     index("reminder_due_at_unsent_idx").on(table.dueAt).where(sql`${table.sentAt} is null and ${table.doneAt} is null`),
     index("reminder_application_id_idx").on(table.applicationId),
     index("reminder_user_id_done_at_idx").on(table.userId, table.doneAt),
+  ],
+);
+
+/**
+ * Marks a user as a temporary demo account (S6, S23). The foreign key covers (user_id, email), so the
+ * row always carries the user's current address, and the check only accepts the demo domain in
+ * lower case: the database refuses a demo row for any real account, and refuses changing a demo
+ * user's address to a real one (ON UPDATE CASCADE copies the new address here, where the check
+ * fails). `expires_at` is always 24 hours after `created_at`. Cleanup deletes only users that have
+ * an expired row AND a demo address (`src/server/demo.ts`); deleting the user removes this row.
+ */
+export const demoAccount = pgTable(
+  "demo_account",
+  {
+    userId: text("user_id").primaryKey(),
+    email: text("email").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    expiresAt: timestamp("expires_at", { withTimezone: true })
+      .notNull()
+      .default(sql.raw(`(now() + interval '${DEMO_LIFETIME_HOURS} hours')`)),
+  },
+  (table) => [
+    foreignKey({
+      name: "demo_account_user_id_email_fk",
+      columns: [table.userId, table.email],
+      foreignColumns: [user.id, user.email],
+    })
+      .onDelete("cascade")
+      .onUpdate("cascade"),
+    check("demo_account_email_check", sql`${table.email} like ${sql.raw(`'${DEMO_EMAIL_LIKE}'`)}`),
+    check(
+      "demo_account_lifetime_check",
+      sql`${table.expiresAt} = ${table.createdAt} + ${sql.raw(`interval '${DEMO_LIFETIME_HOURS} hours'`)}`,
+    ),
+    // Cleanup scans expired rows oldest first.
+    index("demo_account_expires_at_idx").on(table.expiresAt),
   ],
 );
 

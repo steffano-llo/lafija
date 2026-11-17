@@ -133,6 +133,29 @@ export function parseEmailEnv(raw: Record<string, string | undefined>, appUrl: s
   };
 }
 
+export const CRON_CLEANUP_PATH = "/api/cron/cleanup";
+
+/** What the demo cleanup endpoint needs to verify QStash: the two signing keys and its own URL. */
+export type QStashConfig = { currentSigningKey: string; nextSigningKey: string; cleanupUrl: string };
+
+const signingKey = z.string().regex(/^\S+$/);
+
+/**
+ * The QStash signing keys for the demo cleanup (T10), parsed apart from the email group: the
+ * cleanup runs without Resend, a sender or an allowlist, and a malformed email variable does not
+ * stop it. Null when either key is missing, empty or malformed.
+ */
+export function parseQStashEnv(raw: Record<string, string | undefined>, appUrl: string): QStashConfig | null {
+  const current = signingKey.safeParse(raw.QSTASH_CURRENT_SIGNING_KEY);
+  const next = signingKey.safeParse(raw.QSTASH_NEXT_SIGNING_KEY);
+  if (!current.success || !next.success) return null;
+  return {
+    currentSigningKey: current.data,
+    nextSigningKey: next.data,
+    cleanupUrl: `${appUrl.replace(/\/+$/, "")}${CRON_CLEANUP_PATH}`,
+  };
+}
+
 let emailCached: EmailState | undefined;
 
 /**
