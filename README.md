@@ -6,8 +6,8 @@ Job application tracker: register applications, move them through configurable s
 
 ## Stack
 
-Next.js (App Router, Cache Components) + TypeScript · PostgreSQL on Neon · Drizzle ORM · Zod · Better Auth · Tailwind CSS + shadcn/ui · dnd-kit · fractional-indexing · Resend · Upstash QStash · Vitest · Playwright.
-Planned: Recharts, deploy on Vercel.
+Next.js (App Router, Cache Components) + TypeScript · PostgreSQL on Neon · Drizzle ORM · Zod · Better Auth · Tailwind CSS + shadcn/ui · dnd-kit · fractional-indexing · Recharts · Resend · Upstash QStash · Vitest · Playwright.
+Planned: deploy on Vercel.
 
 ## Requirements
 
@@ -149,6 +149,20 @@ Pages: `/dashboard/board` (main view), `/dashboard/applications` (active list, `
 - **Interviews**: an interview whose date has passed cannot be **Pending**. Creating or editing one that way, or setting its outcome back to Pending, is refused with "This interview already happened. Record its outcome instead of Pending." and nothing changes (the outcome check is part of the update). Interviews stored as Pending before this rule show "Record the outcome" on the application page. The form warns, without blocking, "This date is more than a year ago." when the date is over a year back (often a typo in the year).
 - **Salary currency**: every salary has a currency (`application.salary_currency`, ISO 4217). The form offers USD, EUR, ARS, BRL, CLP, COP, MXN, PEN, UYU, GBP and CAD, preselecting the application's currency or the user's default (Settings, initially USD). A salary without a currency is refused with "Choose the currency of the salary.", an invalid code with "Choose a valid currency."; without a salary no currency is stored. A database check enforces "currency exactly when there is a salary". The salary is always shown with its currency ("50k-60k EUR") on the application page and in the applications list.
 - Migration `0006_time_zone_currency_and_due_rules` adds `user_settings.time_zone` (null), `user_settings.default_currency` (`USD`), `application.salary_currency` and `reminder.due_customized` (false). It sets `USD` on existing applications that have a salary, and marks customized every open follow-up whose due time is not exactly its transition plus the user's follow-up days (7 when unset or off), so the first time zone detection realigns only untouched follow-ups. Nothing else changes. It runs inside the single transaction `drizzle-kit migrate` uses; apply it with `npm run db:migrate` before using this version.
+
+### Statistics
+
+`/dashboard/stats` (linked from the dashboard and the header of every dashboard page) shows the search statistics. They are computed in SQL by `src/server/stats.ts` from `stage_transition`, stage categories and positions, and `application`, never from stage names, so renaming a stage changes nothing. Every function takes `(db, userId, options)` and filters every table it reads by the user. Charts use [Recharts](https://recharts.org); each chart is exposed to screen readers as an image with a text summary, and **Show data** opens the same numbers as a table.
+
+- **First stage**: the user's non-archived stage with the lowest position, read when the statistics are computed. Consequences: reordering stages reinterprets the whole history with the new order (an application that only ever sat in the stage that is now first stops counting as a response), and archiving the first stage hands "first" to the next non-archived stage (reaching it is no longer a response). A stage positioned before the first one (for example an archived former first stage) never counts as "after the first".
+- **Applications per stage**: current, non-archived applications in each non-archived stage, in board order, zeros included. Archived applications are never counted here, whatever the toggle says.
+- **Response rate**: applications that ever reached a stage positioned after the first stage (any transition into it, including being created there), over all applications. Moving back later does not undo it; reaching a Rejected or Withdrawn stage after the first also counts. With no applications the rate is shown as "—".
+- **Funnel**: all applications → ever reached a stage after the first → ever reached a stage of category `offer` → ever reached a stage of category `accepted`. Each step is counted on its own from the transitions, so an application accepted without an offer stage counts in Accepted but not in Offer.
+- **Average time in stage**: for every transition into a stage, the time until that application's next transition; the current stay counts until now. An archived application's current stay is left out (archiving records no transition, so its end is unknown). The mean per stage is shown in days with one decimal (half rounded up); archived stages with data are listed and marked; stages without data are not shown.
+- **Applications per week**: the last 12 weeks including the current one, weeks starting Monday, zero-filled. Each application is dated by its applied date, else by its creation date in the user's time zone (UTC while none is stored); the current week is the one of today in that zone. Future dates and older weeks are outside the window.
+- **Per source**: number of applications and response rate (same definition) per source, trimmed; empty or missing sources are grouped as "Unknown". Sorted by count, then name.
+- **Archived applications** are included in every metric except applications per stage. **Exclude archived** (`?archived=exclude`) leaves them out; any other value includes them.
+- Users with no applications see an empty state instead of the charts.
 
 ## Scripts
 

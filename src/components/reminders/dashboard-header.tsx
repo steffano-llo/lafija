@@ -76,10 +76,15 @@ export function DashboardHeader() {
         <Link href="/dashboard" className="font-semibold">
           laFija
         </Link>
-        {/* The session read is request data: the count streams in behind this boundary. */}
-        <Suspense fallback={<RemindersLink due={null} />}>
-          <DueRemindersLink />
-        </Suspense>
+        <nav aria-label="Dashboard" className="flex items-center gap-2">
+          <Link href="/dashboard/stats" className="rounded-lg px-2 py-1 text-sm hover:bg-muted">
+            Statistics
+          </Link>
+          {/* The session read is request data: the count streams in behind this boundary. */}
+          <Suspense fallback={<RemindersLink due={null} />}>
+            <DueRemindersLink />
+          </Suspense>
+        </nav>
         <Suspense fallback={null}>
           <TimeZoneCheck />
         </Suspense>
