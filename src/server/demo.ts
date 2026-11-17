@@ -15,6 +15,14 @@ import { runAtomic } from "./atomic";
 import { rowsOf } from "./board";
 import { seedDemoData } from "./demo-seed";
 
+/** createDemoAccount addresses are `demo-` + 24 lower-case hex characters. */
+const DEMO_LOCAL_PART_BYTES = 12;
+/**
+ * Orphan cleanup only matches generated addresses, so an account that signed up publicly with the
+ * demo domain before the domain was reserved (T10.1) is never treated as an orphan.
+ */
+const GENERATED_DEMO_EMAIL_REGEX = `^demo-[0-9a-f]{${DEMO_LOCAL_PART_BYTES * 2}}@demo\\.lafija\\.invalid$`;
+
 export { DEMO_ACCOUNT_LIMIT };
 
 /** Expired demo accounts deleted per cleanup run at most; the rest go in the next run (hourly). */
@@ -85,7 +93,7 @@ export async function createDemoAccount(
 ): Promise<DemoResult> {
   if ((await countLiveDemos(db, now)) >= limit) return { ok: false, reason: "limit" };
 
-  const email = `demo-${randomBytes(12).toString("hex")}@${DEMO_EMAIL_DOMAIN}`;
+  const email = `demo-${randomBytes(DEMO_LOCAL_PART_BYTES).toString("hex")}@${DEMO_EMAIL_DOMAIN}`;
   const password = randomBytes(24).toString("base64url");
   const headers = new Headers({ "content-type": "application/json", origin: new URL(baseURL).origin });
   if (clientIp) headers.set("x-forwarded-for", clientIp);
@@ -169,6 +177,7 @@ export async function deleteExpiredDemoAccounts(
           union all
           select o."id", o."created_at" + make_interval(hours => ${DEMO_LIFETIME_HOURS}) from "user" o
           where o."email" like ${DEMO_EMAIL_LIKE}
+            and o."email" ~ ${GENERATED_DEMO_EMAIL_REGEX}
             and o."created_at" < ${at}::timestamptz - make_interval(hours => ${DEMO_LIFETIME_HOURS})
             and not exists (select 1 from "demo_account" x where x."user_id" = o."id")
         ) c

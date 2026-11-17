@@ -68,7 +68,7 @@ describe("T10.1 verifier probes (S23)", () => {
         { name: "G", email: "g@demo.lafija.invalid", emailVerified: true },
         { providerId: "google", accountId: "g-1" },
       ),
-    ).rejects.toBeDefined();
+    ).rejects.toMatchObject({ body: { code: "EMAIL_DOMAIN_RESERVED" } });
     expect(await snapshot()).toEqual(before);
   });
 
@@ -89,8 +89,10 @@ describe("T10.1 verifier probes (S23)", () => {
     const now = new Date();
     const at = (ms: number) => new Date(now.getTime() - ms);
     await db.insert(user).values([
-      { id: "o-young", name: "o", email: "o-young@demo.lafija.invalid", createdAt: at(24 * HOUR - 60_000) },
-      { id: "o-old", name: "o", email: "o-old@demo.lafija.invalid", createdAt: at(24 * HOUR + 60_000) },
+      { id: "o-young", name: "o", email: "demo-aaaaaaaaaaaaaaaaaaaaaaaa@demo.lafija.invalid", createdAt: at(24 * HOUR - 60_000) },
+      { id: "o-old", name: "o", email: "demo-bbbbbbbbbbbbbbbbbbbbbbbb@demo.lafija.invalid", createdAt: at(24 * HOUR + 60_000) },
+      // Signed up publicly with the demo domain before T10.1: not a generated address, so never an orphan.
+      { id: "o-legacy", name: "o", email: "legacy@demo.lafija.invalid", createdAt: at(9000 * HOUR) },
       { id: "r-upper", name: "r", email: "R@DEMO.LAFIJA.INVALID", createdAt: at(9000 * HOUR) },
       { id: "r-sub", name: "r", email: "r@sub.demo.lafija.invalid", createdAt: at(9000 * HOUR) },
       { id: "r-suffix", name: "r", email: "r@demo.lafija.invalid.example.com", createdAt: at(9000 * HOUR) },
@@ -98,8 +100,9 @@ describe("T10.1 verifier probes (S23)", () => {
       { id: "r-real", name: "r", email: "r@example.com", createdAt: at(9000 * HOUR) },
     ]);
     expect(await deleteExpiredDemoAccounts(db, { now })).toEqual({ deleted: 1 });
-    expect(await emails()).not.toContain("o-old@demo.lafija.invalid");
-    expect(await emails()).toContain("o-young@demo.lafija.invalid");
+    expect(await emails()).not.toContain("demo-bbbbbbbbbbbbbbbbbbbbbbbb@demo.lafija.invalid");
+    expect(await emails()).toContain("demo-aaaaaaaaaaaaaaaaaaaaaaaa@demo.lafija.invalid");
+    expect(await emails()).toContain("legacy@demo.lafija.invalid");
     await db.execute(sql`delete from "user" where id = 'o-young'`);
     const before = await snapshot();
     expect(await deleteExpiredDemoAccounts(db, { now: new Date(now.getTime() + 3650 * 24 * HOUR) })).toEqual({ deleted: 0 });

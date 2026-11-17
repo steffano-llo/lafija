@@ -140,16 +140,16 @@ describe("T10 verifier probes", () => {
       );
       expect(res.ok).toBe(true);
     };
-    await orphan("demo-orphan@demo.lafija.invalid");
-    await orphan("demo-orphan-young@demo.lafija.invalid");
-    await db.execute(sql`update "user" set "created_at" = now() - interval '25 hours' where email = 'demo-orphan@demo.lafija.invalid'`);
-    await db.execute(sql`update "user" set "created_at" = now() - interval '23 hours' where email = 'demo-orphan-young@demo.lafija.invalid'`);
+    await orphan("demo-0123456789abcdef01234567@demo.lafija.invalid");
+    await orphan("demo-89abcdef0123456789abcdef@demo.lafija.invalid");
+    await db.execute(sql`update "user" set "created_at" = now() - interval '25 hours' where email = 'demo-0123456789abcdef01234567@demo.lafija.invalid'`);
+    await db.execute(sql`update "user" set "created_at" = now() - interval '23 hours' where email = 'demo-89abcdef0123456789abcdef@demo.lafija.invalid'`);
 
     await deleteExpiredDemoAccounts(db);
 
     const emails = (await userIds()).map((u) => u.email);
-    expect(emails).not.toContain("demo-orphan@demo.lafija.invalid");
-    expect(emails).toContain("demo-orphan-young@demo.lafija.invalid");
+    expect(emails).not.toContain("demo-0123456789abcdef01234567@demo.lafija.invalid");
+    expect(emails).toContain("demo-89abcdef0123456789abcdef@demo.lafija.invalid");
   });
 
   it("rate limit: a multi-value x-forwarded-for falls into one shared bucket (advisory off Vercel)", async () => {

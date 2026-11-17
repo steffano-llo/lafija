@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { sql } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { demoAccount, user } from "@/db/schema";
@@ -146,7 +147,7 @@ describe("demo cleanup never touches a real account (S23)", () => {
     // An orphan: a demo-domain user without a demo row (public sign-up refuses the domain, so it
     // is written directly, like a crash between the demo sign-up and its demo row).
     orphanId = "orphan-demo-user";
-    await db.insert(user).values({ id: orphanId, name: "Orphan", email: "demo-orphan@demo.lafija.invalid" });
+    await db.insert(user).values({ id: orphanId, name: "Orphan", email: "demo-0123456789abcdef01234567@demo.lafija.invalid" });
     // The domain in upper case, written behind Better Auth's back (Better Auth stores addresses lower
     // case): cleanup matches the stored lower-case form only, so it is left alone.
     upperId = "upper-case-real-user";
@@ -230,7 +231,7 @@ describe("orphan demo-domain users are cleaned after 24 hours (S23, T10.1)", () 
   const MINUTE = 60 * 1000;
 
   async function orphan(id: string, createdAt: Date): Promise<string> {
-    await db.insert(user).values({ id, name: "Orphan", email: `${id}@demo.lafija.invalid`, createdAt, updatedAt: createdAt });
+    await db.insert(user).values({ id, name: "Orphan", email: `demo-${createHash("sha256").update(id).digest("hex").slice(0, 24)}@demo.lafija.invalid`, createdAt, updatedAt: createdAt });
     await seedDemoData(db, id, createdAt);
     return id;
   }
