@@ -136,7 +136,8 @@ describe("handleReminderCron", () => {
   });
 
   it("with the real job: an invalid signature leaves the database untouched, a valid one sends", async () => {
-    await db.insert(user).values({ id: "cron-owner", name: "Owner", email: "owner@example.com" });
+    // S17: only verified addresses are emailed.
+    await db.insert(user).values({ id: "cron-owner", name: "Owner", email: "owner@example.com", emailVerified: true });
     const created = await createApplication(db, "cron-owner", { companyName: "Acme", role: "Engineer" });
     if (!created.ok) throw new Error("create failed");
     await db.insert(reminder).values({

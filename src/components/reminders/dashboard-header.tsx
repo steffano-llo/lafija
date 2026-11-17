@@ -1,6 +1,10 @@
 import Link from "next/link";
 import { Suspense } from "react";
+import { resendVerificationEmailAction } from "@/app/dashboard/verification-actions";
+import { ResendVerificationButton } from "@/components/auth/resend-verification-button";
 import { getDb } from "@/db";
+import { verificationBlockerMessage, verificationEmailBlocker } from "@/lib/email/eligibility";
+import { getEmailState } from "@/lib/env";
 import { requireUser } from "@/lib/session";
 import { TimeZoneDetector } from "@/components/settings/time-zone-detector";
 import { countDueReminders } from "@/server/reminders";
@@ -37,21 +41,51 @@ async function TimeZoneCheck() {
 }
 
 /**
- * Bar at the top of every dashboard page with the number of due reminders. Rendered by each page,
- * not a layout, so it is fresh on every navigation (layouts are kept across navigations).
+ * Shown only while the user's address is not verified (S17): sign-in is never blocked, but reminder
+ * emails wait for verification. Says when email is unavailable or the address is not allowed.
+ */
+async function VerificationBanner() {
+  const user = await requireUser();
+  if (user.emailVerified) return null;
+  const blocker = verificationEmailBlocker(getEmailState(), user.email);
+  return (
+    <div
+      role="region"
+      aria-label="Email verification"
+      className="flex flex-col gap-2 border-t bg-muted/50 px-6 py-2 text-sm"
+    >
+      <p>
+        Your email address ({user.email}) is not verified, so you do not get reminder emails. Open the link we emailed
+        you, or ask for a new one.
+      </p>
+      {blocker && <p className="text-muted-foreground">{verificationBlockerMessage(blocker)}</p>}
+      <ResendVerificationButton action={resendVerificationEmailAction} />
+    </div>
+  );
+}
+
+/**
+ * Bar at the top of every dashboard page with the number of due reminders and, for unverified
+ * addresses, the verification banner. Rendered by each page, not a layout, so it is fresh on every
+ * navigation (layouts are kept across navigations).
  */
 export function DashboardHeader() {
   return (
-    <header className="flex items-center justify-between gap-4 border-b px-6 py-2">
-      <Link href="/dashboard" className="font-semibold">
-        laFija
-      </Link>
-      {/* The session read is request data: the count streams in behind this boundary. */}
-      <Suspense fallback={<RemindersLink due={null} />}>
-        <DueRemindersLink />
-      </Suspense>
+    <header className="border-b">
+      <div className="flex items-center justify-between gap-4 px-6 py-2">
+        <Link href="/dashboard" className="font-semibold">
+          laFija
+        </Link>
+        {/* The session read is request data: the count streams in behind this boundary. */}
+        <Suspense fallback={<RemindersLink due={null} />}>
+          <DueRemindersLink />
+        </Suspense>
+        <Suspense fallback={null}>
+          <TimeZoneCheck />
+        </Suspense>
+      </div>
       <Suspense fallback={null}>
-        <TimeZoneCheck />
+        <VerificationBanner />
       </Suspense>
     </header>
   );

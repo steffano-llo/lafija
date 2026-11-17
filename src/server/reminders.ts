@@ -313,9 +313,10 @@ export async function createReminder(
 }
 
 /**
- * Replaces the due time and message of the user's reminder; a new due time is emailed again. The
- * form submits whole minutes, so a due time in the same UTC minute as the stored one counts as
- * unchanged: the stored value, `sent_at` and `due_customized` stay (editing only the message is not
+ * Replaces the due time and message of the user's reminder; a new due time is emailed again (clears
+ * `sent_at` and any email lease). The form submits whole minutes, so a due time in the same UTC
+ * minute as the stored one counts as unchanged: the stored value, `sent_at`, the lease and
+ * `due_customized` stay (editing only the message is not
  * a new due time). A new due time marks it customized, so a time zone change never moves it.
  */
 export async function updateReminder(db: Db, userId: string, id: string, input: unknown): Promise<ReminderResult> {
@@ -335,6 +336,7 @@ export async function updateReminder(db: Db, userId: string, id: string, input: 
       dueAt: sql`case when ${sameMinute} then ${reminder.dueAt} else ${dueAt.toISOString()}::timestamptz end`,
       message,
       sentAt: sql`case when ${sameMinute} then ${reminder.sentAt} else null end`,
+      emailClaimedAt: sql`case when ${sameMinute} then ${reminder.emailClaimedAt} else null end`,
       dueCustomized: sql`case when ${sameMinute} then ${reminder.dueCustomized} else true end`,
     })
     .where(and(eq(reminder.userId, userId), eq(reminder.id, id)))
@@ -396,7 +398,7 @@ export async function setReminderDone(db: Db, userId: string, id: string, done: 
 
 /**
  * Moves the due time of the user's open reminder to 1, 3 or 7 days from now (not from its due
- * time); it is emailed again and counts as customized.
+ * time); it is emailed again (clears `sent_at` and any email lease) and counts as customized.
  */
 export async function snoozeReminder(db: Db, userId: string, id: string, days: unknown): Promise<ReminderChangeResult> {
   if (!isId(id)) return notFound;
@@ -404,7 +406,12 @@ export async function snoozeReminder(db: Db, userId: string, id: string, days: u
   if (parsed === null) return (await getReminder(db, userId, id)) ? { ok: false, reason: "invalid" } : notFound;
   const [row] = await db
     .update(reminder)
-    .set({ dueAt: sql`now() + make_interval(days => ${parsed}::int)`, sentAt: null, dueCustomized: true })
+    .set({
+      dueAt: sql`now() + make_interval(days => ${parsed}::int)`,
+      sentAt: null,
+      emailClaimedAt: null,
+      dueCustomized: true,
+    })
     .where(and(eq(reminder.userId, userId), eq(reminder.id, id), isNull(reminder.doneAt)))
     .returning({ id: reminder.id });
   if (row) return loaded(db, userId, row.id);

@@ -45,7 +45,7 @@ export function EmailRemindersForm({
       </div>
       <p id="email-reminders-help" className="text-sm text-muted-foreground">
         One email lists the reminders that became due since the last one (checked every 15 minutes). Reminders always
-        show in laFija; email is sent only while delivery is set up for this app and your address is allowed.
+        show in laFija; email is sent only while delivery is set up for this app and your address is verified and allowed.
       </p>
       {state.error && (
         <p id="email-reminders-error" role="alert" className="text-sm text-destructive">

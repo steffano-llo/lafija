@@ -2,9 +2,12 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { eq } from "drizzle-orm";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import * as schema from "@/db/schema";
 import { createTestDb } from "@/test/db";
+import type { OutgoingEmail, SendResult } from "./email/types";
+import { resendVerificationEmail } from "./email/verification";
+import type { EmailConfig, EmailState } from "./env";
 import { createAuth, getUserFromHeaders, type Auth } from "./auth";
 
 const SECRET = "test-secret-with-at-least-thirty-two-chars";
@@ -67,8 +70,9 @@ const GOOGLE_TOKENS = {
 async function googleCallback(
   profile: { sub: string; email: string; emailVerified: boolean },
   errorCallbackURL?: string,
+  instance: Auth = auth,
 ) {
-  const { headers, response } = await auth.api.signInSocial({
+  const { headers, response } = await instance.api.signInSocial({
     body: { provider: "google", callbackURL: "/dashboard", errorCallbackURL },
     returnHeaders: true,
   });
@@ -104,7 +108,7 @@ async function googleCallback(
     return realFetch(input, init);
   });
   try {
-    return await auth.handler(
+    return await instance.handler(
       new Request(`http://localhost:3000/api/auth/callback/google?code=fake-code&state=${state}`, {
         headers: { cookie: cookieHeader(headers) },
       }),
@@ -381,5 +385,247 @@ describe("Google sign-in for a returning user", () => {
     await googleCallback({ sub: "google-sub-g1", email: "g1@example.com", emailVerified: true });
 
     await expect(signUp("g1@example.com", "attacker-pass")).rejects.toMatchObject({ statusCode: 422 });
+  });
+});
+
+// S17: email verification. A second instance sends through a fake sender; `auth` above has no
+// email delivery (not configured), like a deployment without the email variables.
+describe("email verification (S17)", () => {
+  const sent: OutgoingEmail[] = [];
+  let failNext = false;
+  const sender = {
+    async send(email: OutgoingEmail): Promise<SendResult> {
+      if (failNext) {
+        failNext = false;
+        return { ok: false, error: "provider refused" };
+      }
+      sent.push(email);
+      return { ok: true };
+    },
+  };
+  const config: EmailConfig = {
+    currentSigningKey: "cur",
+    nextSigningKey: "next",
+    resendApiKey: "re_test",
+    from: "laFija <onboarding@resend.dev>",
+    recipients: {
+      everyone: false,
+      addresses: ["vera", "vic", "val", "vio", "vito", "gv", "gu", "w1", "w2"].map((name) => `${name}@example.com`),
+    },
+    appUrl: "http://localhost:3000",
+    cronUrl: "http://localhost:3000/api/cron/reminders",
+  };
+  const state: EmailState = { ok: true, config };
+  let vauth: Auth;
+
+  beforeAll(() => {
+    vauth = createAuth({
+      db,
+      secret: SECRET,
+      baseURL: "http://localhost:3000",
+      google: { clientId: "google-client-id", clientSecret: "google-client-secret" },
+      emailDelivery: { recipients: config.recipients, sender },
+    });
+  });
+
+  afterEach(() => {
+    sent.length = 0;
+    failNext = false;
+    vi.useRealTimers();
+  });
+
+  const sentTo = (email: string) => sent.filter((message) => message.to === email);
+  const linkIn = (message: OutgoingEmail) =>
+    /http:\/\/localhost:3000\/api\/auth\/verify-email\?\S+/.exec(message.text)![0];
+  async function vSignUp(email: string) {
+    return vauth.api.signUpEmail({ body: { name: "V", email, password: "correct-horse-battery" } });
+  }
+  async function vHeaders(email: string) {
+    const { headers } = await vauth.api.signInEmail({
+      body: { email, password: "correct-horse-battery" },
+      returnHeaders: true,
+    });
+    return new Headers({ cookie: cookieHeader(headers) });
+  }
+  async function verifiedOf(email: string) {
+    const [row] = await db.select().from(schema.user).where(eq(schema.user.email, email));
+    return row.emailVerified;
+  }
+  const open = (link: string) => vauth.handler(new Request(link));
+
+  it("sends exactly one verification email on sign-up and does not block sign-in", async () => {
+    await vSignUp("vera@example.com");
+
+    expect(sent).toHaveLength(1);
+    const [message] = sent;
+    expect(message.to).toBe("vera@example.com");
+    expect(message.subject).toBe("Verify your email for laFija");
+    expect(message.text).toContain("http://localhost:3000/api/auth/verify-email?token=");
+    expect(message.html).toContain('href="http://localhost:3000/api/auth/verify-email?token=');
+    expect(new URL(linkIn(message)).searchParams.get("callbackURL")).toBe("/verify-email?status=verified");
+    expect(await verifiedOf("vera@example.com")).toBe(false);
+    // Unverified users still sign in (a banner, not a lock).
+    const user = await getUserFromHeaders(vauth, await vHeaders("vera@example.com"));
+    expect(user).toMatchObject({ email: "vera@example.com", emailVerified: false });
+  });
+
+  it("does not send when email delivery is not configured", async () => {
+    // `auth` was built without delivery, like a deployment without the email variables.
+    await expect(signUp("nocfg@example.com")).resolves.toMatchObject({ user: { email: "nocfg@example.com" } });
+
+    expect(sent).toEqual([]);
+    expect(await verifiedOf("nocfg@example.com")).toBe(false);
+  });
+
+  it("does not send to an address that is not allowed, and sign-up still succeeds", async () => {
+    const result = await vSignUp("stranger@example.com");
+
+    expect(result.user.email).toBe("stranger@example.com");
+    expect(sent).toEqual([]);
+  });
+
+  it("marks the email verified from the link and lands on the confirmation page", async () => {
+    await vSignUp("vic@example.com");
+    const response = await open(linkIn(sentTo("vic@example.com")[0]));
+
+    expect(response.status).toBe(302);
+    expect(response.headers.get("location")).toBe("/verify-email?status=verified");
+    expect(await verifiedOf("vic@example.com")).toBe(true);
+    const user = await getUserFromHeaders(vauth, await vHeaders("vic@example.com"));
+    expect(user?.emailVerified).toBe(true);
+  });
+
+  it("refuses an expired link and an invalid one, leaving the email unverified", async () => {
+    await vSignUp("val@example.com");
+    const link = linkIn(sentTo("val@example.com")[0]);
+
+    const forged = new URL(link);
+    forged.searchParams.set("token", "not-a-token");
+    const invalid = await open(forged.href);
+    expect(invalid.headers.get("location")).toBe("/verify-email?status=verified&error=INVALID_TOKEN");
+
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(Date.now() + 25 * 60 * 60 * 1000);
+    const expired = await open(link);
+    expect(expired.headers.get("location")).toBe("/verify-email?status=verified&error=TOKEN_EXPIRED");
+    expect(await verifiedOf("val@example.com")).toBe(false);
+  });
+
+  it("counts a Google user as verified when Google says the email is verified, and sends nothing", async () => {
+    await googleCallback({ sub: "google-sub-gv", email: "gv@example.com", emailVerified: true }, undefined, vauth);
+
+    expect(await verifiedOf("gv@example.com")).toBe(true);
+    expect(sent).toEqual([]);
+  });
+
+  it("keeps a Google user unverified when Google's claim is false, and sends them a verification link", async () => {
+    await googleCallback({ sub: "google-sub-gu", email: "gu@example.com", emailVerified: false }, undefined, vauth);
+
+    expect(await verifiedOf("gu@example.com")).toBe(false);
+    expect(sentTo("gu@example.com")).toHaveLength(1);
+  });
+
+  it("resends on demand at most once a minute", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    await vSignUp("vio@example.com");
+    const headers = await vHeaders("vio@example.com");
+
+    await expect(resendVerificationEmail(vauth, headers, state)).resolves.toEqual({
+      ok: false,
+      message: "Please wait a minute before asking for another verification email.",
+    });
+    expect(sentTo("vio@example.com")).toHaveLength(1);
+
+    vi.setSystemTime(Date.now() + 61 * 1000);
+    await expect(resendVerificationEmail(vauth, headers, state)).resolves.toEqual({
+      ok: true,
+      message: "Verification email sent to vio@example.com. Check your inbox.",
+    });
+    expect(sentTo("vio@example.com")).toHaveLength(2);
+    // The new link verifies too; after that nothing more is sent.
+    await open(linkIn(sentTo("vio@example.com")[1]));
+    expect(await verifiedOf("vio@example.com")).toBe(true);
+    vi.setSystemTime(Date.now() + 61 * 1000);
+    await expect(resendVerificationEmail(vauth, headers, state)).resolves.toEqual({
+      ok: false,
+      message: "Your email address is already verified.",
+    });
+    expect(sentTo("vio@example.com")).toHaveLength(2);
+  });
+
+  it("does not start the cooldown when the send fails, and explains the failure", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    await vSignUp("vito@example.com");
+    const headers = await vHeaders("vito@example.com");
+    vi.setSystemTime(Date.now() + 61 * 1000);
+
+    failNext = true;
+    await expect(resendVerificationEmail(vauth, headers, state)).resolves.toEqual({
+      ok: false,
+      message: "The verification email could not be sent. Please try again later.",
+    });
+    await expect(resendVerificationEmail(vauth, headers, state)).resolves.toMatchObject({ ok: true });
+    expect(sentTo("vito@example.com")).toHaveLength(2);
+  });
+
+  it("explains why nothing is sent when delivery is unavailable or the address is not allowed", async () => {
+    await vSignUp("w0@example.com");
+    const headers = await vHeaders("w0@example.com");
+
+    await expect(
+      resendVerificationEmail(vauth, headers, { ok: false, reason: "misconfigured", keys: ["EMAIL_FROM"] }),
+    ).resolves.toEqual({
+      ok: false,
+      message: "Email delivery is unavailable right now, so the verification email cannot be sent.",
+    });
+    await expect(
+      resendVerificationEmail(vauth, headers, { ok: false, reason: "not_configured", missing: ["RESEND_API_KEY"] }),
+    ).resolves.toEqual({
+      ok: false,
+      message: "Email delivery is not set up for laFija, so the verification email cannot be sent.",
+    });
+    await expect(resendVerificationEmail(vauth, headers, state)).resolves.toEqual({
+      ok: false,
+      message:
+        "Email delivery is limited while laFija has no domain, so the verification email cannot be sent to your address.",
+    });
+    expect(sent).toEqual([]);
+  });
+
+  it("never sends to another user's address", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    await vSignUp("w1@example.com");
+    await vSignUp("w2@example.com");
+    vi.setSystemTime(Date.now() + 61 * 1000);
+    sent.length = 0;
+    const headers = await vHeaders("w1@example.com");
+
+    // Through the API with w1's session: Better Auth refuses another address.
+    await expect(vauth.api.sendVerificationEmail({ body: { email: "w2@example.com" }, headers })).rejects.toMatchObject({
+      body: { code: "EMAIL_MISMATCH" },
+    });
+    // Over HTTP the endpoint is disabled, with or without a session.
+    for (const cookie of [headers.get("cookie")!, ""]) {
+      const response = await vauth.handler(
+        new Request("http://localhost:3000/api/auth/send-verification-email", {
+          method: "POST",
+          headers: { "content-type": "application/json", origin: "http://localhost:3000", cookie },
+          body: JSON.stringify({ email: "w2@example.com" }),
+        }),
+      );
+      expect(response.status).toBe(404);
+    }
+    expect(sent).toEqual([]);
+    // The resend only ever uses the session's own address.
+    await resendVerificationEmail(vauth, headers, state);
+    expect(sent.map((message) => message.to)).toEqual(["w1@example.com"]);
+  });
+
+  it("refuses a resend without a session", async () => {
+    await expect(resendVerificationEmail(vauth, new Headers(), state)).resolves.toEqual({
+      ok: false,
+      message: "Your session has ended. Sign in again.",
+    });
+    expect(sent).toEqual([]);
   });
 });

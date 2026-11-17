@@ -57,6 +57,13 @@
       "when": 1794870583793,
       "tag": "0007_email_reminders",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1794874193631,
+      "tag": "0008_email_claim_lease",
+      "breakpoints": true
     }
   ]
 }

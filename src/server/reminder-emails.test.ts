@@ -11,6 +11,16 @@ const { createApplication, setApplicationArchived } = await import("./applicatio
 const { snoozeReminder, setReminderDone, listApplicationReminders } = await import("./reminders");
 const { setEmailReminders } = await import("./settings");
 const { sendDueReminderEmails, claimDueRemindersSql } = await import("./reminder-emails");
+const { reminderEmailProblems } = await import("@/lib/email/eligibility");
+
+const mailerConfig = {
+  currentSigningKey: "cur",
+  nextSigningKey: "next",
+  resendApiKey: "re_test",
+  from: "laFija <onboarding@resend.dev>",
+  appUrl: "https://lafija.example",
+  cronUrl: "https://lafija.example/api/cron/reminders",
+};
 
 type TestDb = Awaited<ReturnType<typeof createTestDb>>["db"];
 
@@ -35,11 +45,13 @@ const HOUR = 60 * 60 * 1000;
 const DAY = 24 * HOUR;
 const APP_URL = "https://lafija.example";
 
-async function newUser(email?: string) {
+/** A user whose address is verified unless `verified: false` (S17: only verified addresses get email). */
+async function newUser(email?: string, { verified = true }: { verified?: boolean } = {}) {
   counter += 1;
   const id = `mail-user-${counter}`;
-  await db.insert(user).values({ id, name: `User ${counter}`, email: email ?? `mail${counter}@example.com` });
-  return { id, email: email ?? `mail${counter}@example.com` };
+  const address = email ?? `mail${counter}@example.com`;
+  await db.insert(user).values({ id, name: `User ${counter}`, email: address, emailVerified: verified });
+  return { id, email: address };
 }
 
 async function newApplication(userId: string, companyName = "Acme", role = "Engineer") {
@@ -179,8 +191,7 @@ describe("sendDueReminderEmails: what is claimed", () => {
 
   it("with * emails every opted-in user whose address is verified, and skips unverified addresses", async () => {
     const verified = await newUser();
-    const unverified = await newUser();
-    await db.update(user).set({ emailVerified: true }).where(eq(user.id, verified.id));
+    const unverified = await newUser(undefined, { verified: false });
     const vApp = await newApplication(verified.id);
     const uApp = await newApplication(unverified.id);
     await dueReminder(verified.id, vApp.id, "Verified");
@@ -190,6 +201,51 @@ describe("sendDueReminderEmails: what is claimed", () => {
     expect(await sendDueReminderEmails(db, mailer)).toEqual({ claimed: 1, sent: 1, failed: 0, skipped: 1 });
     expect(mailer.sent.map((e) => e.to)).toEqual([verified.email]);
     expect(await sentAtOf(u.id)).toBeNull();
+  });
+});
+
+describe("sendDueReminderEmails: the S17 recipient rule", () => {
+  it("does not email a listed address that is not verified", async () => {
+    const listed = await newUser(undefined, { verified: false });
+    const app = await newApplication(listed.id);
+    const r = await dueReminder(listed.id, app.id, "Listed but unverified");
+    const mailer = fakeMailer([listed.email]);
+
+    expect(await sendDueReminderEmails(db, mailer)).toEqual({ claimed: 0, sent: 0, failed: 0, skipped: 1 });
+    expect(mailer.sent).toEqual([]);
+    expect(await sentAtOf(r.id)).toBeNull();
+  });
+
+  // Configured is implied by running the job (without configuration the cron answers 503); the other
+  // three conditions are crossed here, and the outcome must agree with what Settings explains.
+  const matrix = (["*", "listed", "not listed"] as const).flatMap((allowlist) =>
+    [true, false].flatMap((verified) => [true, false].map((emailOn) => ({ allowlist, verified, emailOn }))),
+  );
+
+  it.each(matrix)("allowlist $allowlist, verified=$verified, switch=$emailOn", async ({ allowlist, verified, emailOn }) => {
+    const subject = await newUser(undefined, { verified });
+    if (!emailOn) await setEmailReminders(db, subject.id, { emailReminders: false });
+    const app = await newApplication(subject.id);
+    const r = await dueReminder(subject.id, app.id, "Matrix");
+    const mailer = fakeMailer(
+      allowlist === "*" ? "*" : allowlist === "listed" ? [subject.email] : ["someone-else@example.com"],
+    );
+    const expected = verified && emailOn && allowlist !== "not listed";
+
+    const summary = await sendDueReminderEmails(db, mailer);
+
+    expect(summary).toEqual(
+      expected ? { claimed: 1, sent: 1, failed: 0, skipped: 0 } : { claimed: 0, sent: 0, failed: 0, skipped: 1 },
+    );
+    expect(mailer.sent.map((e) => e.to)).toEqual(expected ? [subject.email] : []);
+    expect((await sentAtOf(r.id)) !== null).toBe(expected);
+    const problems = reminderEmailProblems({
+      state: { ok: true, config: { ...mailerConfig, recipients: mailer.recipients } },
+      email: subject.email,
+      emailVerified: verified,
+      emailReminders: emailOn,
+    });
+    expect(problems.length === 0).toBe(expected);
   });
 });
 
@@ -376,6 +432,146 @@ describe("sendDueReminderEmails: failures and re-runs", () => {
     expect(text).toMatch(/for update of r skip locked/i);
     expect(text).toMatch(/limit/i);
     expect(await sendDueReminderEmails(db, mailer)).toEqual({ claimed: 1, sent: 1, failed: 0, skipped: 0 });
+  });
+});
+
+describe("claim lease (S19)", () => {
+  const MINUTE = 60 * 1000;
+
+  async function claimOf(id: string) {
+    const [row] = await db
+      .select({ sentAt: reminder.sentAt, claimedAt: reminder.emailClaimedAt })
+      .from(reminder)
+      .where(eq(reminder.id, id));
+    return row;
+  }
+
+  /** A mailer whose sends wait until `release()`: lets a test look at the rows mid-send (or never finish). */
+  function pausedMailer(addresses: string[]) {
+    const sent: OutgoingEmail[] = [];
+    let release: (result: { ok: true } | { ok: false; error: string }) => void = () => {};
+    let started: () => void = () => {};
+    const sending = new Promise<void>((resolve) => (started = resolve));
+    const mailer: ReminderMailer = {
+      appUrl: APP_URL,
+      recipients: { everyone: false, addresses },
+      send(email) {
+        sent.push(email);
+        started();
+        return new Promise((resolve) => (release = resolve));
+      },
+    };
+    return { mailer, sent, sending, release: (result: { ok: true } | { ok: false; error: string }) => release(result) };
+  }
+
+  it("after a crash between claim and send, re-claims only once the 30-minute lease expires, with the same idempotency key", async () => {
+    const ola = await newUser();
+    const app = await newApplication(ola.id);
+    const r = await dueReminder(ola.id, app.id, "Crash me");
+    const t0 = new Date();
+    const crashed = pausedMailer([ola.email]);
+
+    // The run claims and starts sending, then the process dies: the send never finishes.
+    void sendDueReminderEmails(db, crashed.mailer, t0);
+    await crashed.sending;
+    expect(await claimOf(r.id)).toEqual({ sentAt: null, claimedAt: t0 });
+
+    const mailer = fakeMailer([ola.email]);
+    expect(await sendDueReminderEmails(db, mailer, new Date(t0.getTime() + 29 * MINUTE))).toEqual({
+      claimed: 0,
+      sent: 0,
+      failed: 0,
+      skipped: 0,
+    });
+    expect(await claimOf(r.id)).toEqual({ sentAt: null, claimedAt: t0 });
+
+    const later = new Date(t0.getTime() + 31 * MINUTE);
+    expect(await sendDueReminderEmails(db, mailer, later)).toEqual({ claimed: 1, sent: 1, failed: 0, skipped: 0 });
+    expect(await claimOf(r.id)).toEqual({ sentAt: later, claimedAt: null });
+    // Resend drops the second send within its window if the first one had been delivered.
+    expect(mailer.sent[0]?.idempotencyKey).toBe(crashed.sent[0]?.idempotencyKey);
+  });
+
+  it("a second claimer cannot take leased rows", async () => {
+    const pia = await newUser();
+    const app = await newApplication(pia.id);
+    const r = await dueReminder(pia.id, app.id, "Leased");
+    const t0 = new Date();
+    const recipients = { everyone: false, addresses: [pia.email] };
+
+    const first = await db.execute(claimDueRemindersSql({ now: t0, recipients, batchSize: 10 }));
+    const second = await db.execute(
+      claimDueRemindersSql({ now: new Date(t0.getTime() + MINUTE), recipients, batchSize: 10 }),
+    );
+
+    expect((first as unknown as { rows: { id: string }[] }).rows.map((row) => row.id)).toEqual([r.id]);
+    expect((second as unknown as { rows: unknown[] }).rows).toEqual([]);
+    expect(await claimOf(r.id)).toEqual({ sentAt: null, claimedAt: t0 });
+  });
+
+  it("on success sets sent_at and clears the claim; a failure releases only this run's claims", async () => {
+    const quin = await newUser();
+    const app = await newApplication(quin.id);
+    const leasedByOther = await dueReminder(quin.id, app.id, "Leased by another run", 2 * HOUR);
+    const mine = await dueReminder(quin.id, app.id, "Mine");
+    const t0 = new Date();
+    const recipients = { everyone: false, addresses: [quin.email] };
+    // Another (crashed) run leased the first one only.
+    await db.execute(claimDueRemindersSql({ now: t0, recipients, batchSize: 1 }));
+    expect(await claimOf(leasedByOther.id)).toEqual({ sentAt: null, claimedAt: t0 });
+
+    const failing = fakeMailer([quin.email]);
+    failing.failFor.add(quin.email);
+    const t1 = new Date(t0.getTime() + 5 * MINUTE);
+    expect(await sendDueReminderEmails(db, failing, t1)).toEqual({ claimed: 1, sent: 0, failed: 1, skipped: 0 });
+    expect(await claimOf(mine.id)).toEqual({ sentAt: null, claimedAt: null });
+    expect(await claimOf(leasedByOther.id)).toEqual({ sentAt: null, claimedAt: t0 });
+
+    const ok = fakeMailer([quin.email]);
+    const t2 = new Date(t0.getTime() + 6 * MINUTE);
+    expect(await sendDueReminderEmails(db, ok, t2)).toEqual({ claimed: 1, sent: 1, failed: 0, skipped: 0 });
+    expect(await claimOf(mine.id)).toEqual({ sentAt: t2, claimedAt: null });
+    expect(await claimOf(leasedByOther.id)).toEqual({ sentAt: null, claimedAt: t0 });
+  });
+
+  it("a reminder snoozed while its email is being sent is not marked sent by that run", async () => {
+    const rae = await newUser();
+    const app = await newApplication(rae.id);
+    const r = await dueReminder(rae.id, app.id, "Snoozed mid-send");
+    const paused = pausedMailer([rae.email]);
+
+    const run = sendDueReminderEmails(db, paused.mailer);
+    await paused.sending;
+    await snoozeReminder(db, rae.id, r.id, "1");
+    paused.release({ ok: true });
+    await run;
+
+    expect(await claimOf(r.id)).toEqual({ sentAt: null, claimedAt: null });
+  });
+
+  it("snoozing and editing the due time clear both sent_at and the claim; a same-minute edit keeps them", async () => {
+    const { updateReminder } = await import("./reminders");
+    const sam = await newUser();
+    const app = await newApplication(sam.id);
+    const r = await dueReminder(sam.id, app.id, "Clear me");
+    const at = new Date(Date.now() - MINUTE);
+    const set = (sentAt: Date | null, claimedAt: Date | null) =>
+      db.update(reminder).set({ sentAt, emailClaimedAt: claimedAt }).where(eq(reminder.id, r.id));
+
+    await set(at, at);
+    await snoozeReminder(db, sam.id, r.id, "3");
+    expect(await claimOf(r.id)).toEqual({ sentAt: null, claimedAt: null });
+
+    await set(at, at);
+    const [{ dueAt }] = await db.select({ dueAt: reminder.dueAt }).from(reminder).where(eq(reminder.id, r.id));
+    await updateReminder(db, sam.id, r.id, { dueAt: dueAt.toISOString(), message: "Only the message" });
+    expect(await claimOf(r.id)).toEqual({ sentAt: at, claimedAt: at });
+
+    await updateReminder(db, sam.id, r.id, {
+      dueAt: new Date(dueAt.getTime() + DAY).toISOString(),
+      message: "New due time",
+    });
+    expect(await claimOf(r.id)).toEqual({ sentAt: null, claimedAt: null });
   });
 });
 

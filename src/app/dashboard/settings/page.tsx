@@ -5,6 +5,8 @@ import { DashboardHeader } from "@/components/reminders/dashboard-header";
 import { EmailRemindersForm } from "@/components/settings/email-reminders-form";
 import { SettingsSelectForm } from "@/components/settings/settings-select-form";
 import { getDb } from "@/db";
+import { emailProblemMessage, reminderEmailProblems } from "@/lib/email/eligibility";
+import { getEmailState } from "@/lib/env";
 import { requireUser } from "@/lib/session";
 import { CURRENCIES, FALLBACK_TIME_ZONE } from "@/lib/validation/settings";
 import { getEmailReminders, getUserSettings, listTimeZones } from "@/server/settings";
@@ -13,6 +15,32 @@ import { setDefaultCurrencyAction, setEmailRemindersAction, setTimeZoneAction } 
 export const metadata: Metadata = { title: "Settings · laFija" };
 
 const currencyOptions = CURRENCIES.map((code) => ({ value: code, label: code }));
+
+/** Why reminder emails do (or do not) reach this user (S17); no variable names or allowlist entries. */
+function EmailDeliveryStatus({ email, problems }: { email: string; problems: ReturnType<typeof reminderEmailProblems> }) {
+  if (problems.length === 0) {
+    return (
+      <p id="email-delivery-status" className="text-sm">
+        Due reminders are emailed to {email}.
+      </p>
+    );
+  }
+  return (
+    <div id="email-delivery-status" className="flex flex-col gap-1 text-sm">
+      <p>You do not get reminder emails because:</p>
+      <ul className="list-disc pl-5">
+        {problems.map((problem) => (
+          <li key={problem}>{emailProblemMessage(problem)}</li>
+        ))}
+      </ul>
+      {problems.includes("unverified") && (
+        <p className="text-muted-foreground">
+          Use “Resend verification email” at the top of the page to get a new verification link.
+        </p>
+      )}
+    </div>
+  );
+}
 
 async function SettingsForms() {
   const user = await requireUser();
@@ -63,6 +91,15 @@ async function SettingsForms() {
           Email
         </h2>
         <EmailRemindersForm enabled={emailReminders} action={setEmailRemindersAction} />
+        <EmailDeliveryStatus
+          email={user.email}
+          problems={reminderEmailProblems({
+            state: getEmailState(),
+            email: user.email,
+            emailVerified: user.emailVerified,
+            emailReminders,
+          })}
+        />
       </section>
     </>
   );

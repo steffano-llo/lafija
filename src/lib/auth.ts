@@ -3,19 +3,26 @@ import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import { nextCookies } from "better-auth/next-js";
 import * as schema from "@/db/schema";
 import { getDb } from "@/db";
-import { getEnv } from "@/lib/env";
-
-type AuthDatabase = Parameters<typeof drizzleAdapter>[0];
+import { createResendMailer } from "@/lib/email/resend-sender";
+import {
+  createSendVerificationEmail,
+  VERIFICATION_LINK_HOURS,
+  type VerificationDelivery,
+} from "@/lib/email/verification";
+import { getEmailState, getEnv } from "@/lib/env";
+import type { Db } from "@/server/applications";
 
 export interface AuthConfig {
-  db: AuthDatabase;
+  db: Db;
   secret: string;
   baseURL: string;
   google: { clientId: string; clientSecret: string };
+  /** How verification emails are sent; omitted or null when email delivery is unavailable. */
+  emailDelivery?: VerificationDelivery;
 }
 
 /** Builds the Better Auth instance. Tests pass an isolated database; the app uses `getAuth()`. */
-export function createAuth({ db, secret, baseURL, google }: AuthConfig) {
+export function createAuth({ db, secret, baseURL, google, emailDelivery = null }: AuthConfig) {
   return betterAuth({
     database: drizzleAdapter(db, { provider: "pg", schema }),
     secret,
@@ -23,7 +30,20 @@ export function createAuth({ db, secret, baseURL, google }: AuthConfig) {
     emailAndPassword: {
       enabled: true,
       minPasswordLength: 8,
+      // Unverified users still sign in; the dashboard shows a banner instead (S17).
+      requireEmailVerification: false,
     },
+    emailVerification: {
+      // Sign-up sends the link (sign-up.mjs:247-260; a failure is logged and sign-up still succeeds).
+      sendOnSignUp: true,
+      sendOnSignIn: false,
+      autoSignInAfterVerification: false,
+      expiresIn: VERIFICATION_LINK_HOURS * 60 * 60,
+      sendVerificationEmail: createSendVerificationEmail(db, emailDelivery),
+    },
+    // On-demand resends go through the dashboard's Server Action (session address, cooldown); the
+    // public endpoint would let anyone trigger a send to any unverified address without a session.
+    disabledPaths: ["/send-verification-email"],
     socialProviders: {
       google: { clientId: google.clientId, clientSecret: google.clientSecret },
     },
@@ -63,11 +83,14 @@ let instance: Auth | undefined;
 export function getAuth(): Auth {
   if (!instance) {
     const env = getEnv();
+    const email = getEmailState();
+    const mailer = email.ok ? createResendMailer(email.config) : null;
     instance = createAuth({
       db: getDb(),
       secret: env.BETTER_AUTH_SECRET,
       baseURL: env.BETTER_AUTH_URL,
       google: { clientId: env.GOOGLE_CLIENT_ID, clientSecret: env.GOOGLE_CLIENT_SECRET },
+      emailDelivery: mailer ? { recipients: mailer.recipients, sender: mailer } : null,
     });
   }
   return instance;

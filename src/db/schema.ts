@@ -358,8 +358,9 @@ export const reminderKind = pgEnum("reminder_kind", REMINDER_KINDS);
  * `follow_up` ones are created in the same transaction as a transition into an active-category
  * stage (one per transition, see `syncFollowUpSql`) and closed (`done_at`) by the next transition
  * or by archiving.
- * `sent_at` is set when the email job claims the reminder and cleared again if that email fails
- * (`src/server/reminder-emails.ts`).
+ * The email job (`src/server/reminder-emails.ts`) leases a reminder by setting `email_claimed_at`
+ * (a lease expires after 30 minutes, so a crash mid-send never loses it), then sets `sent_at` and
+ * clears the lease once the email is accepted, or only clears the lease if it fails.
  */
 export const reminder = pgTable(
   "reminder",
@@ -377,6 +378,8 @@ export const reminder = pgTable(
     // The transition a follow-up reminder was created for; null for manual reminders.
     transitionId: text("transition_id"),
     sentAt: timestamp("sent_at", { withTimezone: true }),
+    // Lease of a running email job; cleared on success, failure, snooze or a new due time.
+    emailClaimedAt: timestamp("email_claimed_at", { withTimezone: true }),
     // Set when the user edits the due time or snoozes: a time zone change then leaves it alone.
     dueCustomized: boolean("due_customized").notNull().default(false),
     doneAt: timestamp("done_at", { withTimezone: true }),
@@ -427,8 +430,10 @@ export const userSettings = pgTable(
     timeZone: text("time_zone"),
     // ISO 4217 code preselected for new salaries.
     defaultCurrency: text("default_currency").notNull().default(DEFAULT_CURRENCY),
-    // Due reminders are emailed (digest) when on and the address is allowed; in-app either way.
+    // Due reminders are emailed (digest) when on, the address is verified and allowed; in-app either way.
     emailReminders: boolean("email_reminders").notNull().default(true),
+    // Last verification email sent to this user: on-demand resends wait 60 seconds after it.
+    verificationEmailSentAt: timestamp("verification_email_sent_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true })
       .notNull()

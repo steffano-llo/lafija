@@ -6,7 +6,7 @@
  *
  * Without `--env-file` it uses the variables already in the environment. Variables already set in
  * the shell win over the file. Prints only the summary, or the names of missing variables; never a
- * value.
+ * value. A malformed email variable is named (never its value) and exits non-zero too.
  */
 import { config } from "dotenv";
 
@@ -21,10 +21,14 @@ async function main() {
   const envFile = envFileArgument(process.argv.slice(2));
   if (envFile) config({ path: envFile, quiet: true });
 
-  const { getEmailConfig, getEnv } = await import("../src/lib/env");
-  const email = getEmailConfig(getEnv());
+  const { getEnv, parseEmailEnv } = await import("../src/lib/env");
+  const email = parseEmailEnv(process.env, getEnv().BETTER_AUTH_URL);
   if (!email.ok) {
-    console.error(`Email is not configured. Missing: ${email.missing.join(", ")}`);
+    console.error(
+      email.reason === "misconfigured"
+        ? `Email is misconfigured. Invalid: ${email.keys.join(", ")}`
+        : `Email is not configured. Missing: ${email.missing.join(", ")}`,
+    );
     process.exitCode = 1;
     return;
   }

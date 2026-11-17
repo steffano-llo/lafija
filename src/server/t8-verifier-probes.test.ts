@@ -1,7 +1,7 @@
 import { createHash, createHmac } from "node:crypto";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { reminder, user, userSettings } from "@/db/schema";
-import { getEmailConfig, parseEnv, parseRecipientAllowlist } from "@/lib/env";
+import { parseEmailEnv, parseEnv, parseRecipientAllowlist } from "@/lib/env";
 import type { OutgoingEmail, ReminderMailer } from "@/lib/email/types";
 import { createTestDb } from "@/test/db";
 
@@ -49,7 +49,7 @@ function sign(body: string, url: string, key = "sig_current") {
 }
 
 describe("cron signature subject comes from BETTER_AUTH_URL", () => {
-  const email = getEmailConfig(parseEnv(base));
+  const email = parseEmailEnv(base, parseEnv(base).BETTER_AUTH_URL);
   if (!email.ok) throw new Error("config");
   const config = email.config;
   const call = (signature: string) =>
@@ -96,10 +96,11 @@ describe("allowlist and env", () => {
     for (const bad of ["a@b.com;c@d.com", "Owner <a@b.com>", "**"]) expect(parseRecipientAllowlist(bad)).toBeNull();
   });
 
-  it("names malformed optional keys only", () => {
-    expect(() => parseEnv({ ...base, RESEND_API_KEY: "sk_secret_value" })).toThrow(
-      "Invalid environment variables: RESEND_API_KEY",
-    );
+  it("names malformed optional keys only, and only email is disabled (S18)", () => {
+    expect(parseEnv({ ...base, RESEND_API_KEY: "sk_secret_value" }).BETTER_AUTH_URL).toBe(base.BETTER_AUTH_URL);
+    const email = parseEmailEnv({ ...base, RESEND_API_KEY: "sk_secret_value" }, base.BETTER_AUTH_URL);
+    expect(email).toEqual({ ok: false, reason: "misconfigured", keys: ["RESEND_API_KEY"] });
+    expect(JSON.stringify(email)).not.toContain("sk_secret_value");
   });
 });
 
