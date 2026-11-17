@@ -1,0 +1,1 @@
+ALTER TYPE "public"."stage_category" ADD VALUE 'wishlist' BEFORE 'active';

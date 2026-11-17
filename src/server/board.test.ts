@@ -73,6 +73,7 @@ describe("listBoard", () => {
     const offer = await stageNamed(userId, "Offer");
     await setStageArchived(db, userId, offer.id, true);
     const first = await newApplication(userId, "First");
+    expect(first.appliedAt).toMatch(/^\d{4}-\d{2}-\d{2}$/);
     await newApplication(userId, "Second");
     const hidden = await newApplication(userId, "Hidden", screening.id);
     await setApplicationArchived(db, userId, hidden.id, true);
@@ -82,7 +83,8 @@ describe("listBoard", () => {
 
     expect(columns.map((c) => c.name)).toEqual(["Applied", "Screening", "Interview", "Rejected", "Accepted"]);
     expect(columns[0].cards).toEqual([
-      { id: first.id, companyName: "Acme", role: "First", appliedAt: null },
+      // S21: created in Applied (not a wishlist stage) without a date, it got today's date.
+      { id: first.id, companyName: "Acme", role: "First", appliedAt: first.appliedAt },
       expect.objectContaining({ role: "Second" }),
       expect.objectContaining({ companyName: "Globex", role: "Dated", appliedAt: "2024-05-01" }),
     ]);

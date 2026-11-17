@@ -124,6 +124,11 @@ describe("listApplications", () => {
     const userId = await newUser();
     const older = await create(userId, { companyName: "Acme", role: "Old", appliedAt: "2024-01-10" });
     const undated = await create(userId, { companyName: "Acme", role: "Undated" });
+    // S21: created in Applied it got today's date; cleared while keeping the stage, it stays undated.
+    expect(await updateApplication(db, userId, undated.id, { companyName: "Acme", role: "Undated", appliedAt: "" })).toMatchObject({
+      ok: true,
+      application: { appliedAt: null },
+    });
     const newer = await create(userId, { companyName: "Globex", role: "New", appliedAt: "2024-03-01" });
     const archived = await create(userId, { companyName: "Initech", role: "Gone" });
     await setApplicationArchived(db, userId, archived.id, true);

@@ -13,7 +13,9 @@ let close: () => Promise<void>;
 beforeAll(async () => ({ db, close } = await createTestDb()));
 afterAll(async () => close());
 
-// Expectations computed by hand by the T9 verifier (S5 definitions in L32).
+// Expectations computed by hand by the T9 verifier (S5 definitions in L32); response rate and funnel
+// updated for S21 (applied stage = first non-wishlist stage; a response is a later-positioned stage
+// that is not withdrawn or wishlist), with the reason next to each changed number.
 const NOW = new Date("2026-03-16T07:30:00Z"); // Mon 00:30 in LA (PDT), Mon 21:30 in Kiritimati
 const STAGES: [string, StageCategory, number, boolean][] = [
   ["Inbox", "active", 0, true], // archived first stage
@@ -147,7 +149,9 @@ describe("stats computed by hand (verifier probe)", () => {
   it("isolation: p unchanged after q is seeded", async () => {
     expect(await getStats(db, "p", { now: NOW })).toEqual(before);
     const q = await getStats(db, "q", { now: NOW });
-    expect(q.funnel).toEqual({ total: 7, responded: 7, offer: 7, accepted: 7 });
+    // S21: q's "Referral " app was applied in the archived Inbox, positioned last (9) for q, so no
+    // stage is after its applied stage: 6 responses, not 7.
+    expect(q.funnel).toEqual({ total: 7, responded: 6, offer: 7, accepted: 7 });
     expect(q.timeZone).toBe("Pacific/Kiritimati");
   });
 
@@ -162,8 +166,9 @@ describe("stats computed by hand (verifier probe)", () => {
       ["Accepted", 1],
       ["Withdrawn", 0],
     ]);
-    expect(s.funnel).toEqual({ total: 7, responded: 6, offer: 1, accepted: 1 });
-    expect(s.responseRate).toEqual({ total: 7, responded: 6, rate: 6 / 7 });
+    // S21: " linkedin " was created directly in Interview (its applied stage) and never moved on: no response.
+    expect(s.funnel).toEqual({ total: 7, responded: 5, offer: 1, accepted: 1 });
+    expect(s.responseRate).toEqual({ total: 7, responded: 5, rate: 5 / 7 });
     expect(s.averageTimeInStage.map((d) => [d.name, d.averageDays, d.samples, d.archived])).toEqual([
       ["Inbox", 2, 1, true],
       ["Applied", 5.8, 7, false],
@@ -176,14 +181,14 @@ describe("stats computed by hand (verifier probe)", () => {
       ["Referral", 3, 3],
       ["Unknown", 2, 1],
       ["LinkedIn", 1, 1],
-      ["linkedin", 1, 1],
+      ["linkedin", 1, 0], // S21: created in Interview, no later stage
     ]);
     expect(s.weekly).toEqual(weeks({ "2026-02-02": 1, "2026-03-02": 1, "2026-03-09": 3 }, "2025-12-29"));
   });
 
   it("exclude archived", async () => {
     const s = await getStats(db, "p", { now: NOW, includeArchived: false });
-    expect(s.funnel).toEqual({ total: 6, responded: 5, offer: 0, accepted: 1 });
+    expect(s.funnel).toEqual({ total: 6, responded: 4, offer: 0, accepted: 1 }); // S21: " linkedin " as above
     expect(s.averageTimeInStage.find((d) => d.name === "Applied")).toMatchObject({ averageDays: 5.1, samples: 6 });
     expect(s.sources.map((x) => [x.source, x.count])).toEqual([
       ["Referral", 2],

@@ -251,9 +251,10 @@ describe("statistics on a seeded scenario", () => {
     ]);
   });
 
-  it("response rate: share of applications that ever reached a stage after the first non-archived one", async () => {
-    // a1, a2, a4 (created in a later stage), a5 (Old inbox is before the first stage, Got offer after), a6.
-    expect(await getResponseRate(db, userId, { now: NOW })).toEqual({ total: 6, responded: 5, rate: 5 / 6 });
+  it("response rate: applied applications that later reached a later-positioned, non-withdrawn stage (S21)", async () => {
+    // a1, a2, a5 (applied in Old inbox, position 0; Sent is after it), a6. Not a3 (never left Sent)
+    // nor a4 (applied in Phone call, created there; Sent is before it).
+    expect(await getResponseRate(db, userId, { now: NOW })).toEqual({ total: 6, responded: 4, rate: 4 / 6 });
     expect(await getResponseRate(db, userId, { now: NOW, includeArchived: false })).toEqual({
       total: 4,
       responded: 3,
@@ -262,7 +263,7 @@ describe("statistics on a seeded scenario", () => {
   });
 
   it("funnel by category: every step is 'ever reached', so accepted can exceed offer", async () => {
-    expect(await getFunnel(db, userId, { now: NOW })).toEqual({ total: 6, responded: 5, offer: 2, accepted: 2 });
+    expect(await getFunnel(db, userId, { now: NOW })).toEqual({ total: 6, responded: 4, offer: 2, accepted: 2 });
     expect(await getFunnel(db, userId, { now: NOW, includeArchived: false })).toEqual({
       total: 4,
       responded: 3,
@@ -312,7 +313,8 @@ describe("statistics on a seeded scenario", () => {
   it("per source: count and response rate, empty source grouped as Unknown", async () => {
     expect(await getSourceStats(db, userId, { now: NOW })).toEqual([
       { source: "LinkedIn", count: 2, responded: 2, rate: 1 },
-      { source: "Referral", count: 2, responded: 2, rate: 1 },
+      // a4 (created in Phone call, then back to Sent) is no longer a response (S21).
+      { source: "Referral", count: 2, responded: 1, rate: 0.5 },
       { source: "Unknown", count: 2, responded: 1, rate: 0.5 },
     ]);
     expect(await getSourceStats(db, userId, { now: NOW, includeArchived: false })).toEqual([
@@ -413,37 +415,39 @@ describe("applications per week in the user's time zone", () => {
 
 describe("response rate edge cases", () => {
   it("uses the stage order at query time: reordering stages changes which applications responded", async () => {
+    // S21: an application created in a stage is applied there and has not responded, so the T9 case
+    // (A only in X, B only in Y) now has no responses at all; reordering is shown with moves instead.
     const userId = await newUser("reorder");
     const stages = await seedStages(userId, [
       { name: "X", category: "active" },
       { name: "Y", category: "active" },
     ]);
-    await seedApplication(userId, stages, { source: "A", createdAt: "2026-03-01T00:00:00Z", path: [["X", "2026-03-01T00:00:00Z"]] }, 1);
-    await seedApplication(userId, stages, { source: "B", createdAt: "2026-03-01T00:00:00Z", path: [["Y", "2026-03-01T00:00:00Z"]] }, 2);
-    expect(await getResponseRate(db, userId, { now: NOW })).toEqual({ total: 2, responded: 1, rate: 0.5 });
-    expect(await getSourceStats(db, userId, { now: NOW })).toEqual([
-      { source: "A", count: 1, responded: 0, rate: 0 },
-      { source: "B", count: 1, responded: 1, rate: 1 },
-    ]);
-
-    // Y becomes the first stage: the application only ever in Y no longer responded, the one in X now did.
-    await db.update(stage).set({ position: 5 }).where(sqlStage(stages.get("X")!));
+    await seedApplication(userId, stages, { source: "A", createdAt: "2026-03-01T00:00:00Z", path: [["X", "2026-03-01T00:00:00Z"], ["Y", "2026-03-02T00:00:00Z"]] }, 1);
+    await seedApplication(userId, stages, { source: "B", createdAt: "2026-03-01T00:00:00Z", path: [["Y", "2026-03-01T00:00:00Z"], ["X", "2026-03-02T00:00:00Z"]] }, 2);
     expect(await getResponseRate(db, userId, { now: NOW })).toEqual({ total: 2, responded: 1, rate: 0.5 });
     expect(await getSourceStats(db, userId, { now: NOW })).toEqual([
       { source: "A", count: 1, responded: 1, rate: 1 },
       { source: "B", count: 1, responded: 0, rate: 0 },
     ]);
+
+    // X moves after Y: B (Y then X) now responded, A (X then Y) no longer did.
+    await db.update(stage).set({ position: 5 }).where(sqlStage(stages.get("X")!));
+    expect(await getResponseRate(db, userId, { now: NOW })).toEqual({ total: 2, responded: 1, rate: 0.5 });
+    expect(await getSourceStats(db, userId, { now: NOW })).toEqual([
+      { source: "A", count: 1, responded: 0, rate: 0 },
+      { source: "B", count: 1, responded: 1, rate: 1 },
+    ]);
     expect((await getStageTotals(db, userId)).map((t) => t.name)).toEqual(["Y", "X"]);
   });
 
-  it("an archived first stage hands 'first' to the next non-archived stage", async () => {
+  it("archiving a stage does not change the applied stage or the response (S21)", async () => {
     const userId = await newUser("archfirst");
     const stages = await seedStages(userId, [
       { name: "Applied", category: "active" },
       { name: "Screen", category: "active" },
       { name: "Talks", category: "active" },
     ]);
-    // Moved Applied → Screen: responded while Applied is the first stage.
+    // Moved Applied → Screen: responded.
     await seedApplication(
       userId,
       stages,
@@ -451,9 +455,10 @@ describe("response rate edge cases", () => {
       1,
     );
     expect((await getResponseRate(db, userId, { now: NOW })).responded).toBe(1);
-    // Archiving Applied makes Screen the first stage: reaching Screen is no longer a response.
+    // T9 measured from the first non-archived stage, so archiving Applied undid the response. S21
+    // measures from the application's own applied stage (Applied, archived or not): still a response.
     await db.update(stage).set({ archived: true }).where(sqlStage(stages.get("Applied")!));
-    expect(await getResponseRate(db, userId, { now: NOW })).toEqual({ total: 1, responded: 0, rate: 0 });
+    expect(await getResponseRate(db, userId, { now: NOW })).toEqual({ total: 1, responded: 1, rate: 1 });
   });
 });
 

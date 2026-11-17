@@ -6,7 +6,7 @@ import { DashboardHeader } from "@/components/reminders/dashboard-header";
 import { ApplicationForm } from "@/components/applications/application-form";
 import { getDb } from "@/db";
 import { requireUser } from "@/lib/session";
-import { getApplication, listCompanies } from "@/server/applications";
+import { getApplication, listCompanies, listSourceSuggestions } from "@/server/applications";
 import { getUserSettings } from "@/server/settings";
 import { listStages } from "@/server/stages";
 import { updateApplicationAction } from "../../actions";
@@ -19,9 +19,10 @@ async function EditApplicationForm({ params }: { params: Params }) {
   const user = await requireUser();
   const { id } = await params;
   const db = getDb();
-  const [application, companies, stages, settings] = await Promise.all([
+  const [application, companies, sources, stages, settings] = await Promise.all([
     getApplication(db, user.id, id),
     listCompanies(db, user.id),
+    listSourceSuggestions(db, user.id),
     listStages(db, user.id),
     getUserSettings(db, user.id),
   ]);
@@ -46,7 +47,9 @@ async function EditApplicationForm({ params }: { params: Params }) {
         appliedAt: application.appliedAt ?? "",
       }}
       companies={companies.map((company) => company.name)}
+      sources={sources}
       stages={stageOptions}
+      timeZone={settings.timeZone}
       submitLabel="Save changes"
     />
   );

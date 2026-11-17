@@ -62,10 +62,13 @@ async function snapshot() {
 }
 
 describe("applied date autofill", () => {
-  it("is not filled when created in the first stage", async () => {
+  // S21 replaced "after the first stage by position" with "a non-wishlist stage": Applied (the
+  // default first stage, category active) now fills it. Wishlist cases: src/server/wishlist.test.ts.
+  it("is filled when created in the first stage, which is not a wishlist stage (S21)", async () => {
     const userId = await newUser();
     const app = await newApplication(userId);
-    expect(app.appliedAt).toBeNull();
+    const t = await latestTransition(userId, app.id);
+    expect(app.appliedAt).toBe(localDateIn(t.at, "UTC"));
   });
 
   it("is filled with the transition's UTC date when created into a later stage and no zone is known", async () => {
@@ -108,6 +111,9 @@ describe("applied date autofill", () => {
     const userId = await newUser();
     const screening = await stageNamed(userId, "Screening");
     const app = await newApplication(userId);
+    // S21: created in Applied it got a date; cleared while staying in the stage, it stays empty.
+    const emptied = await updateApplication(db, userId, app.id, { companyName: "Acme", role: "Engineer", appliedAt: "" });
+    expect(emptied).toEqual({ ok: true, application: expect.objectContaining({ appliedAt: null }) });
 
     const same = await updateApplication(db, userId, app.id, { companyName: "Acme", role: "Engineer II" });
     expect(same).toEqual({ ok: true, application: expect.objectContaining({ appliedAt: null }) });
@@ -125,10 +131,11 @@ describe("applied date autofill", () => {
     });
     expect(cleared).toEqual({ ok: true, application: expect.objectContaining({ appliedAt: null }) });
 
-    // A move back into the first stage does not fill it either.
+    // S21: a move back into Applied (not a wishlist stage) fills it too; T7.2 left it empty.
     const applied = await stageNamed(userId, "Applied");
     expect(await moveApplication(db, userId, app.id, { stageId: applied.id, index: 0 })).toEqual({ ok: true });
-    expect(await appliedAt(userId, app.id)).toBeNull();
+    const back = await latestTransition(userId, app.id);
+    expect(await appliedAt(userId, app.id)).toBe(localDateIn(back.at, "UTC"));
   });
 
   it("uses the local date of the transition in the user's zone", async () => {
@@ -146,13 +153,16 @@ describe("applied date autofill", () => {
     expect(a.appliedAt).not.toBe(b.appliedAt);
   });
 
-  it("counts from the first non-archived stage", async () => {
+  // S21: the rule reads the stage's category, not positions, so archiving Applied changes nothing
+  // (T7.2 measured from the first non-archived stage and left this one empty).
+  it("does not depend on which stage is first", async () => {
     const userId = await newUser();
     const applied = await stageNamed(userId, "Applied");
     const screening = await stageNamed(userId, "Screening");
     expect(await setStageArchived(db, userId, applied.id, true)).toMatchObject({ ok: true });
     const app = await newApplication(userId, { stageId: screening.id });
-    expect(app.appliedAt).toBeNull();
+    const t = await latestTransition(userId, app.id);
+    expect(app.appliedAt).toBe(localDateIn(t.at, "UTC"));
   });
 
   it("reorders and refused moves change nothing", async () => {
@@ -160,8 +170,9 @@ describe("applied date autofill", () => {
     const screening = await stageNamed(userId, "Screening");
     const first = await newApplication(userId, { role: "First" });
     await newApplication(userId, { role: "Second" });
+    // S21: filled at creation in Applied; a reorder within the column leaves it as it was.
     expect(await moveApplication(db, userId, first.id, { stageId: first.stageId, index: 1 })).toEqual({ ok: true });
-    expect(await appliedAt(userId, first.id)).toBeNull();
+    expect(await appliedAt(userId, first.id)).toBe(first.appliedAt);
 
     const other = await newUser();
     const before = await snapshot();

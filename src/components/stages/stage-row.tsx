@@ -6,7 +6,7 @@ import { ConfirmActionButton } from "@/components/actions/confirm-dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { NativeSelect } from "@/components/ui/native-select";
-import { STAGE_CATEGORIES, STAGE_CATEGORY_LABELS, STAGE_NAME_MAX, type StageCategory } from "@/lib/validation/stage";
+import { STAGE_CATEGORIES, STAGE_CATEGORY_OPTION_LABELS, STAGE_NAME_MAX, type StageCategory } from "@/lib/validation/stage";
 import type { StageFormAction, StageRowAction } from "./form-state";
 
 export type StageRowData = { id: string; name: string; category: StageCategory; archived: boolean };
@@ -56,12 +56,12 @@ export function StageRow({
             id={categoryId}
             name="category"
             defaultValue={editState.values.category ?? stage.category}
-            className="w-32"
+            className="w-52"
             aria-invalid={editState.fieldErrors?.category ? true : undefined}
           >
             {STAGE_CATEGORIES.map((category) => (
               <option key={category} value={category}>
-                {STAGE_CATEGORY_LABELS[category]}
+                {STAGE_CATEGORY_OPTION_LABELS[category]}
               </option>
             ))}
           </NativeSelect>

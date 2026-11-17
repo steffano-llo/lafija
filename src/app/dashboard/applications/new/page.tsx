@@ -5,7 +5,7 @@ import { DashboardHeader } from "@/components/reminders/dashboard-header";
 import { ApplicationForm } from "@/components/applications/application-form";
 import { getDb } from "@/db";
 import { requireUser } from "@/lib/session";
-import { listCompanies } from "@/server/applications";
+import { listCompanies, listSourceSuggestions } from "@/server/applications";
 import { getUserSettings } from "@/server/settings";
 import { listStages } from "@/server/stages";
 import { createApplicationAction } from "../actions";
@@ -15,8 +15,9 @@ export const metadata: Metadata = { title: "New application · laFija" };
 async function NewApplicationForm() {
   const user = await requireUser();
   const db = getDb();
-  const [companies, stages, settings] = await Promise.all([
+  const [companies, sources, stages, settings] = await Promise.all([
     listCompanies(db, user.id),
+    listSourceSuggestions(db, user.id),
     listStages(db, user.id),
     getUserSettings(db, user.id),
   ]);
@@ -28,7 +29,9 @@ async function NewApplicationForm() {
       // The salary currency starts as the user's default (Settings).
       initialValues={{ stageId: activeStages[0]?.id, salaryCurrency: settings.defaultCurrency }}
       companies={companies.map((company) => company.name)}
+      sources={sources}
       stages={activeStages.map(({ id, name }) => ({ id, name }))}
+      timeZone={settings.timeZone}
       submitLabel="Save application"
     />
   );

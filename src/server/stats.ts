@@ -21,6 +21,7 @@ export type StatsOptions = {
 
 export type StageTotal = { stageId: string; name: string; category: StageCategory; count: number };
 export type ResponseRate = { total: number; responded: number; rate: number | null };
+/** `total` = applied applications (ever reached a non-wishlist stage); every step is within them. */
 export type Funnel = { total: number; responded: number; offer: number; accepted: number };
 export type StageDuration = {
   stageId: string;
@@ -38,7 +39,10 @@ export type SourceStats = { source: string; count: number; responded: number; ra
 export type Stats = {
   includeArchived: boolean;
   timeZone: string;
+  /** Every application in scope, applied or not. */
   totalApplications: number;
+  /** Applications in scope that only ever sat in wishlist stages; left out of every rate. */
+  notAppliedYet: number;
   stageTotals: StageTotal[];
   responseRate: ResponseRate;
   funnel: Funnel;
@@ -66,26 +70,40 @@ function appScopeSql(userId: string, includeArchived: boolean): SQL {
 }
 
 /**
- * One row per application in scope with what it ever reached, from its transitions:
- * `responded` = a stage whose position is greater than the user's first stage (lowest position
- * among non-archived stages, read now); `offer` / `accepted` = a stage of that category.
+ * One row per application in scope with what it ever reached, from its transitions (S21):
+ * - `applied_*`: its first transition (by time, then id) into a stage whose category is not
+ *   `wishlist`; `applied` is false when it only ever sat in wishlist stages.
+ * - `responded`: it ever reached a stage positioned after its applied stage whose category is
+ *   neither `withdrawn` nor `wishlist`. Positions are read now, so reordering stages reinterprets
+ *   history. Every transition before the applied one is into a wishlist stage, so "after reaching
+ *   the applied stage" needs no time condition.
+ * - `offer` / `accepted`: it ever reached a stage of that category (such stages are never wishlist,
+ *   so these imply `applied`).
  */
 function applicationFlagsSql(userId: string, includeArchived: boolean): SQL {
   return sql`
     select
       a."id",
+      a."applied_at",
       coalesce(nullif(btrim(a."source"), ''), ${UNKNOWN_SOURCE}) as "source",
-      coalesce(bool_or(s."position" > f."position"), false) as "responded",
+      ap."position" is not null as "applied",
+      ap."at" as "applied_transition_at",
+      coalesce(bool_or(s."category" not in ('withdrawn', 'wishlist') and s."position" > ap."position"), false) as "responded",
       coalesce(bool_or(s."category" = 'offer'), false) as "offer",
       coalesce(bool_or(s."category" = 'accepted'), false) as "accepted"
     from "application" a
-    cross join (
-      select min(fs."position") as "position" from "stage" fs where fs."user_id" = ${userId} and fs."archived" = false
-    ) f
+    left join lateral (
+      select fs."position", ft."at"
+      from "stage_transition" ft
+      join "stage" fs on fs."id" = ft."to_stage_id" and fs."user_id" = ${userId}
+      where ft."application_id" = a."id" and ft."user_id" = ${userId} and fs."category" <> 'wishlist'
+      order by ft."at", ft."id"
+      limit 1
+    ) ap on true
     left join "stage_transition" t on t."application_id" = a."id" and t."user_id" = ${userId}
     left join "stage" s on s."id" = t."to_stage_id" and s."user_id" = ${userId}
     where ${appScopeSql(userId, includeArchived)}
-    group by a."id", a."source"
+    group by a."id", a."applied_at", a."source", ap."position", ap."at"
   `;
 }
 
@@ -102,24 +120,32 @@ export async function getStageTotals(db: Db, userId: string): Promise<StageTotal
   return rowsOf<StageTotal>(result);
 }
 
-/** Applications that ever reached a stage after the user's first stage, over all applications in scope. */
+/** Applied applications that got a response, over applied applications in scope (S21). */
 export async function getResponseRate(db: Db, userId: string, options?: StatsOptions): Promise<ResponseRate> {
   const { total, responded } = await getFunnel(db, userId, options);
   return { total, responded, rate: total === 0 ? null : responded / total };
 }
 
-/** Applications → ever after the first stage → ever in an offer stage → ever in an accepted stage. */
-export async function getFunnel(db: Db, userId: string, options?: StatsOptions): Promise<Funnel> {
+type Counts = Funnel & { notApplied: number };
+
+async function getCounts(db: Db, userId: string, options?: StatsOptions): Promise<Counts> {
   const { includeArchived } = resolve(options);
   const result = await db.execute(sql`
     select
-      count(*)::int as "total",
-      count(*) filter (where f."responded")::int as "responded",
-      count(*) filter (where f."offer")::int as "offer",
-      count(*) filter (where f."accepted")::int as "accepted"
+      count(*) filter (where f."applied")::int as "total",
+      count(*) filter (where f."applied" and f."responded")::int as "responded",
+      count(*) filter (where f."applied" and f."offer")::int as "offer",
+      count(*) filter (where f."applied" and f."accepted")::int as "accepted",
+      count(*) filter (where not f."applied")::int as "notApplied"
     from (${applicationFlagsSql(userId, includeArchived)}) f
   `);
-  return rowsOf<Funnel>(result)[0];
+  return rowsOf<Counts>(result)[0];
+}
+
+/** Applied → responded → ever in an offer stage → ever in an accepted stage, all within applied applications. */
+export async function getFunnel(db: Db, userId: string, options?: StatsOptions): Promise<Funnel> {
+  const { total, responded, offer, accepted } = await getCounts(db, userId, options);
+  return { total, responded, offer, accepted };
 }
 
 /**
@@ -161,9 +187,10 @@ export async function getAverageTimeInStage(db: Db, userId: string, options?: St
 }
 
 /**
- * Applications per week for the last 12 weeks (the current one included), oldest first, zero-filled.
- * The date is the applied date, else the creation date in the user's time zone (UTC when unknown);
- * weeks start on Monday and "now" is read in the same zone.
+ * Applied applications per week for the last 12 weeks (the current one included), oldest first,
+ * zero-filled. The date is the applied date, else the local date of the first transition into a
+ * non-wishlist stage, in the user's time zone (UTC when unknown); weeks start on Monday and "now" is
+ * read in the same zone. Wishlist-only applications are not counted.
  */
 export async function getWeeklyApplications(db: Db, userId: string, options?: StatsOptions): Promise<WeekCount[]> {
   const { includeArchived, now } = resolve(options);
@@ -175,9 +202,9 @@ export async function getWeeklyApplications(db: Db, userId: string, options?: St
       from "today", generate_series(0, ${WEEKS - 1}) g
     ),
     "dated" as (
-      select coalesce(a."applied_at", (a."created_at" at time zone "tz"."name")::date) as "d"
-      from "application" a, "tz"
-      where ${appScopeSql(userId, includeArchived)}
+      select coalesce(f."applied_at", (f."applied_transition_at" at time zone "tz"."name")::date) as "d"
+      from (${applicationFlagsSql(userId, includeArchived)}) f, "tz"
+      where f."applied"
     ),
     "bucketed" as (select ("d" - (extract(isodow from "d")::int - 1))::date as "week_start" from "dated")
     select w."week_start"::text as "weekStart", count(b."week_start")::int as "count"
@@ -189,7 +216,7 @@ export async function getWeeklyApplications(db: Db, userId: string, options?: St
   return rowsOf<WeekCount>(result);
 }
 
-/** Count and response rate per source (trimmed; empty is "Unknown"), most applications first. */
+/** Applied applications and their response rate per source (trimmed; empty is "Unknown"), most applications first. */
 export async function getSourceStats(db: Db, userId: string, options?: StatsOptions): Promise<SourceStats[]> {
   const { includeArchived } = resolve(options);
   const result = await db.execute(sql`
@@ -199,6 +226,7 @@ export async function getSourceStats(db: Db, userId: string, options?: StatsOpti
       count(*) filter (where f."responded")::int as "responded",
       (count(*) filter (where f."responded"))::float8 / count(*) as "rate"
     from (${applicationFlagsSql(userId, includeArchived)}) f
+    where f."applied"
     group by f."source"
     order by count(*) desc, f."source" collate "C"
   `);
@@ -213,18 +241,20 @@ async function getTimeZone(db: Db, userId: string): Promise<string> {
 /** Every metric for the statistics page. */
 export async function getStats(db: Db, userId: string, options?: StatsOptions): Promise<Stats> {
   const resolved = resolve(options);
-  const [timeZone, stageTotals, funnel, averageTimeInStage, weekly, sources] = await Promise.all([
+  const [timeZone, stageTotals, counts, averageTimeInStage, weekly, sources] = await Promise.all([
     getTimeZone(db, userId),
     getStageTotals(db, userId),
-    getFunnel(db, userId, resolved),
+    getCounts(db, userId, resolved),
     getAverageTimeInStage(db, userId, resolved),
     getWeeklyApplications(db, userId, resolved),
     getSourceStats(db, userId, resolved),
   ]);
+  const funnel: Funnel = { total: counts.total, responded: counts.responded, offer: counts.offer, accepted: counts.accepted };
   return {
     includeArchived: resolved.includeArchived,
     timeZone,
-    totalApplications: funnel.total,
+    totalApplications: funnel.total + counts.notApplied,
+    notAppliedYet: counts.notApplied,
     stageTotals,
     responseRate: { total: funnel.total, responded: funnel.responded, rate: funnel.total === 0 ? null : funnel.responded / funnel.total },
     funnel,

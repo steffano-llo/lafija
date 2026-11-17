@@ -9,7 +9,7 @@ describe("parseStageInput", () => {
         data: { name: "Take-home", category },
       });
     }
-    expect(STAGE_CATEGORIES).toEqual(["active", "offer", "rejected", "accepted", "withdrawn"]);
+    expect(STAGE_CATEGORIES).toEqual(["wishlist", "active", "offer", "rejected", "accepted", "withdrawn"]);
   });
 
   it("requires a name and a known category", () => {

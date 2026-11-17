@@ -33,7 +33,7 @@ function ArchivedToggle({ includeArchived }: { includeArchived: boolean }) {
 function Metrics({ stats }: { stats: Stats }) {
   const { funnel, responseRate } = stats;
   const funnelSteps = [
-    { label: "Applications", value: funnel.total },
+    { label: "Applied", value: funnel.total },
     { label: "Got a response", value: funnel.responded },
     { label: "Reached an offer", value: funnel.offer },
     { label: "Accepted", value: funnel.accepted },
@@ -51,11 +51,13 @@ function Metrics({ stats }: { stats: Stats }) {
         </h2>
         <p className="text-3xl font-semibold tabular-nums">{formatPercent(responseRate.rate)}</p>
         <p className="text-sm">
-          {responseRate.responded} of {responseRate.total} applications got a response.
+          {responseRate.responded} of {responseRate.total} applied applications got a response.
         </p>
+        <p className="text-sm">Not applied yet: {stats.notAppliedYet}</p>
         <p className="text-sm text-muted-foreground">
-          Share of applications that ever moved past your first stage (the first non-archived stage in your current
-          order), including rejections.
+          An application counts as applied once it reaches any stage that is not a Wishlist stage; it got a response
+          when it later reached a stage placed after that one (in your current order) that is not Withdrawn or Wishlist.
+          Rejections count as responses. Applications only ever in Wishlist stages are counted apart.
         </p>
       </section>
 
@@ -73,10 +75,10 @@ function Metrics({ stats }: { stats: Stats }) {
       <StatsFigure
         id="funnel"
         title="Funnel"
-        definition="Applications that ever reached each step: a stage after your first one, a stage of category Offer, a stage of category Accepted. Steps are counted independently, so Accepted can exceed Offer."
+        definition="Applied applications that ever reached each step: a response (as defined above), a stage of category Offer, a stage of category Accepted. Steps are counted independently, so Accepted can exceed Offer. Applications not applied yet are not included."
         summary={`Funnel: ${funnelSteps.map((s) => `${s.label} ${s.value}`).join(", ")}.`}
         chart={{ data: funnelSteps, valueName: "Applications", horizontal: true, height: 200 }}
-        columns={[{ header: "Step" }, { header: "Applications", numeric: true }, { header: "Of all", numeric: true }]}
+        columns={[{ header: "Step" }, { header: "Applications", numeric: true }, { header: "Of applied", numeric: true }]}
         rows={funnelSteps.map((s) => [s.label, s.value, formatPercent(funnel.total === 0 ? null : s.value / funnel.total)])}
       />
 
@@ -102,7 +104,7 @@ function Metrics({ stats }: { stats: Stats }) {
       <StatsFigure
         id="weekly"
         title="Applications per week"
-        definition={`Applications by applied date (created date when it is empty) over the last ${WEEKS} weeks, weeks starting Monday in your time zone (${stats.timeZone}).`}
+        definition={`Applied applications by applied date (else the date they first reached a non-Wishlist stage) over the last ${WEEKS} weeks, weeks starting Monday in your time zone (${stats.timeZone}).`}
         summary={`${weeklyTotal} applications in the last ${WEEKS} weeks: ${stats.weekly
           .filter((w) => w.count > 0)
           .map((w) => `week of ${formatWeek(w.weekStart, currentYear)} ${w.count}`)
@@ -115,7 +117,7 @@ function Metrics({ stats }: { stats: Stats }) {
       <StatsFigure
         id="sources"
         title="Applications per source"
-        definition='Applications and response rate per source; applications without a source are grouped as "Unknown".'
+        definition='Applied applications and their response rate per source; applications without a source are grouped as "Unknown".'
         summary={`Applications per source: ${stats.sources.map((s) => `${s.source} ${s.count}, ${formatPercent(s.rate)} response`).join("; ")}.`}
         chart={{ data: stats.sources.map((s) => ({ label: s.source, value: s.count })), valueName: "Applications" }}
         columns={[{ header: "Source" }, { header: "Applications", numeric: true }, { header: "Response rate", numeric: true }]}

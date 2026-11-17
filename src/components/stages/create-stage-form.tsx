@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { NativeSelect } from "@/components/ui/native-select";
-import { STAGE_CATEGORIES, STAGE_CATEGORY_LABELS, STAGE_NAME_MAX } from "@/lib/validation/stage";
+import { STAGE_CATEGORIES, STAGE_CATEGORY_OPTION_LABELS, STAGE_NAME_MAX } from "@/lib/validation/stage";
 import type { StageFormAction } from "./form-state";
 
 export function CreateStageForm({ action }: { action: StageFormAction }) {
@@ -28,7 +28,7 @@ export function CreateStageForm({ action }: { action: StageFormAction }) {
             aria-describedby={nameErrors ? "new-stage-name-error" : undefined}
           />
         </div>
-        <div className="flex w-40 flex-col gap-2">
+        <div className="flex w-56 flex-col gap-2">
           <Label htmlFor="new-stage-category">Category</Label>
           <NativeSelect
             id="new-stage-category"
@@ -39,7 +39,7 @@ export function CreateStageForm({ action }: { action: StageFormAction }) {
           >
             {STAGE_CATEGORIES.map((category) => (
               <option key={category} value={category}>
-                {STAGE_CATEGORY_LABELS[category]}
+                {STAGE_CATEGORY_OPTION_LABELS[category]}
               </option>
             ))}
           </NativeSelect>

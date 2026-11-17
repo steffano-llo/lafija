@@ -10,7 +10,7 @@ import { isId } from "./ids";
 import { keyAfter, keyForIndex } from "./ordering";
 import { runAtomic } from "./atomic";
 import { syncFollowUpSql } from "./reminders";
-import { isAfterFirstStageSql, userLocalDateSql } from "./time-zone-sql";
+import { isAppliedStageSql, userLocalDateSql } from "./time-zone-sql";
 
 export type BoardCard = { id: string; companyName: string; role: string; appliedAt: string | null };
 
@@ -160,8 +160,8 @@ export async function bottomKey(db: Db, userId: string, stageId: string): Promis
  * Moves the user's non-archived application to `index` in the column of `stageId` (a non-archived
  * stage of the same user). A change of stage appends a transition in the same statement as the
  * update, so one never happens without the other; a reorder within the column records nothing.
- * A stage change into a stage after the first one fills an empty applied date with the date of the
- * move in the user's time zone, in that same statement.
+ * A stage change into a non-wishlist stage fills an empty applied date with the date of the move in
+ * the user's time zone, in that same statement (a move between wishlist stages never does).
  * A second statement in the same transaction then syncs the automatic follow-up reminder
  * (`syncFollowUpSql`): after a stage change the old one is closed and, in an active stage, a new
  * one starts; a reorder or a refused move writes no transition, so it changes no reminder.
@@ -190,7 +190,7 @@ export async function moveApplication(
     "moved" as (
       update "application" a set "stage_id" = ${stageId}, "position" = ${position}, "updated_at" = now(),
         "applied_at" = case
-          when a."applied_at" is null and c."stage_id" <> ${stageId} and ${isAfterFirstStageSql(userId, sql`${stageId}`)}
+          when a."applied_at" is null and c."stage_id" <> ${stageId} and ${isAppliedStageSql(userId, sql`${stageId}`)}
             then ${userLocalDateSql(userId)}
           else a."applied_at" end
       from "current" c

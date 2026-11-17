@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { CURRENCY_INVALID_MESSAGE, isCurrencyCode } from "./settings";
+import { normalizeSource } from "./source";
 
 export const APPLICATION_LIMITS = {
   companyName: 120,
@@ -15,6 +16,27 @@ const MAX_UTC_OFFSET_MS = 14 * 60 * 60 * 1000;
 /** Latest calendar date (YYYY-MM-DD) that is not in the future for some time zone. */
 export function latestAllowedDate(now: Date = new Date()): string {
   return new Date(now.getTime() + MAX_UTC_OFFSET_MS).toISOString().slice(0, 10);
+}
+
+export const FUTURE_DATE_WARNING = "This date is in the future.";
+
+/** Today (YYYY-MM-DD) in the zone; the runtime's zone when none is given or it is unknown. */
+function todayIn(timeZone: string | undefined, now: Date): string {
+  const format = (zone: string | undefined) =>
+    new Intl.DateTimeFormat("en-CA", { timeZone: zone, year: "numeric", month: "2-digit", day: "2-digit" }).format(now);
+  try {
+    return format(timeZone);
+  } catch {
+    return format(undefined);
+  }
+}
+
+/**
+ * True when `value` is a valid date after today in the user's zone (S22: the form warns, without
+ * blocking). The server still applies `latestAllowedDate`.
+ */
+export function isFutureDate(value: string, timeZone?: string, now: Date = new Date()): boolean {
+  return isCalendarDate(value) && value > todayIn(timeZone, now);
 }
 
 function isCalendarDate(value: string): boolean {
@@ -67,10 +89,14 @@ const applicationFieldsSchema = z.object({
       .max(APPLICATION_LIMITS.url, `URL must be at most ${APPLICATION_LIMITS.url} characters.`)
       .refine(isHttpUrl, { message: "Enter a valid http(s) URL.", abort: true }),
   ),
-  source: optionalText(
-    z
-      .string({ error: "Enter a valid source." })
-      .max(APPLICATION_LIMITS.source, `Source must be at most ${APPLICATION_LIMITS.source} characters.`),
+  // Inner whitespace collapsed too (S20); the server then picks the user's or the preset spelling.
+  source: z.preprocess(
+    (value) => (typeof value === "string" ? (normalizeSource(value) ?? "") : value),
+    optionalText(
+      z
+        .string({ error: "Enter a valid source." })
+        .max(APPLICATION_LIMITS.source, `Source must be at most ${APPLICATION_LIMITS.source} characters.`),
+    ),
   ),
   salaryRange: optionalText(
     z

@@ -1,16 +1,26 @@
 import { z } from "zod";
 
-/** Fixed meaning of a stage, used by statistics instead of its (editable) name. */
-export const STAGE_CATEGORIES = ["active", "offer", "rejected", "accepted", "withdrawn"] as const;
+/**
+ * Fixed meaning of a stage, used by statistics instead of its (editable) name. `wishlist` means
+ * "not applied yet" (S21): reaching any other category makes an application applied.
+ */
+export const STAGE_CATEGORIES = ["wishlist", "active", "offer", "rejected", "accepted", "withdrawn"] as const;
 
 export type StageCategory = (typeof STAGE_CATEGORIES)[number];
 
 export const STAGE_CATEGORY_LABELS: Record<StageCategory, string> = {
+  wishlist: "Wishlist",
   active: "Active",
   offer: "Offer",
   rejected: "Rejected",
   accepted: "Accepted",
   withdrawn: "Withdrawn",
+};
+
+/** Option text of the category selects on the stages page. */
+export const STAGE_CATEGORY_OPTION_LABELS: Record<StageCategory, string> = {
+  ...STAGE_CATEGORY_LABELS,
+  wishlist: "Wishlist (not applied yet)",
 };
 
 export const STAGE_NAME_MAX = 60;

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { parseApplicationInput } from "./application";
+import { FUTURE_DATE_WARNING, isFutureDate, parseApplicationInput } from "./application";
 
 const valid = { companyName: "Acme", role: "Frontend Engineer" };
 
@@ -106,5 +106,41 @@ describe("parseApplicationInput", () => {
       success: false,
       fieldErrors: { appliedAt: ["Applied date cannot be in the future."] },
     });
+  });
+});
+
+describe("source normalization in the form input (S20)", () => {
+  it("collapses inner whitespace and trims; blank is null", () => {
+    expect(parseApplicationInput({ ...valid, source: "  Get   on\tBoard  " })).toMatchObject({
+      success: true,
+      data: { source: "Get on Board" },
+    });
+    expect(parseApplicationInput({ ...valid, source: " \t " })).toMatchObject({ success: true, data: { source: null } });
+  });
+});
+
+describe("isFutureDate (S22 warning)", () => {
+  const now = new Date("2024-06-15T12:00:00Z");
+
+  it("compares with today in the given time zone", () => {
+    expect(isFutureDate("2024-06-15", "UTC", now)).toBe(false);
+    expect(isFutureDate("2024-06-16", "UTC", now)).toBe(true);
+    // Already June 16 in Kiritimati (UTC+14): the 16th is today there, not the future.
+    expect(isFutureDate("2024-06-16", "Pacific/Kiritimati", now)).toBe(false);
+    expect(isFutureDate("2024-06-17", "Pacific/Kiritimati", now)).toBe(true);
+    // Still June 15 in Pago Pago (UTC-11) at 01:00.
+    expect(isFutureDate("2024-06-15", "Pacific/Pago_Pago", now)).toBe(false);
+    expect(isFutureDate("2024-06-14", "UTC", now)).toBe(false);
+  });
+
+  it("is false for empty or invalid dates, and falls back to the runtime zone for an unknown zone", () => {
+    expect(isFutureDate("", "UTC", now)).toBe(false);
+    expect(isFutureDate("2024-02-30", "UTC", now)).toBe(false);
+    expect(isFutureDate("2999-01-01", "Not/AZone", now)).toBe(true);
+    expect(isFutureDate("2999-01-01", undefined, now)).toBe(true);
+  });
+
+  it("has the exact warning text", () => {
+    expect(FUTURE_DATE_WARNING).toBe("This date is in the future.");
   });
 });

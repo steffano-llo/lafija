@@ -1,17 +1,18 @@
 import "server-only";
 
-import { and, asc, desc, eq, sql } from "drizzle-orm";
+import { and, asc, desc, eq, sql, type SQL } from "drizzle-orm";
 import type { PgDatabase, PgQueryResultHKT } from "drizzle-orm/pg-core";
 import * as schema from "@/db/schema";
 import { application, company, stage } from "@/db/schema";
 import { parseApplicationInput, parseNotesInput, type FieldErrors } from "@/lib/validation/application";
+import { SOURCE_PRESETS, sourceSuggestions } from "@/lib/validation/source";
 import type { StageCategory } from "@/lib/validation/stage";
-import { bottomKey } from "./board";
+import { bottomKey, rowsOf } from "./board";
 import { isId } from "./ids";
 import { runAtomic } from "./atomic";
 import { closeArchivedFollowUpSql, syncFollowUpSql } from "./reminders";
 import { ensureDefaultStages } from "./stages";
-import { isAfterFirstStageSql, userLocalDateSql } from "./time-zone-sql";
+import { isAppliedStageSql, userLocalDateSql } from "./time-zone-sql";
 
 /**
  * Any Drizzle Postgres database with the app schema: Neon HTTP in the app, PGlite in tests.
@@ -99,6 +100,60 @@ export async function findOrCreateCompany(db: Db, userId: string, name: string):
   return row;
 }
 
+/** A stored source column, normalized like `normalizeSource`: whitespace runs collapsed, trimmed, blank null. */
+function normalizedSourceSql(column: SQL): SQL {
+  return sql`nullif(btrim(regexp_replace(${column}, '\\s+', ' ', 'g')), '')`;
+}
+
+const presetValuesSql = sql`(values ${sql.join(
+  SOURCE_PRESETS.map((preset) => sql`(${preset}::text)`),
+  sql`, `,
+)}) as p("form")`;
+
+/**
+ * The source to store (S20), for an already normalized input: the user's existing form equal to it
+ * ignoring case (most used, then the preset spelling, then byte order), else the preset spelling,
+ * else the input. `exceptId` leaves out the application being edited, so the only application
+ * with a source can still change its case. Evaluated inside the write statement.
+ */
+function canonicalSourceSql(userId: string, source: string | null, exceptId?: string): SQL {
+  if (source === null) return sql`null::text`;
+  const others = exceptId ? sql`and a."id" <> ${exceptId}` : sql``;
+  return sql`coalesce(
+    (
+      select f."form" from (
+        select ${normalizedSourceSql(sql`a."source"`)} as "form", count(*) as "n"
+        from "application" a
+        where a."user_id" = ${userId} and a."source" is not null ${others}
+        group by 1
+      ) f
+      where lower(f."form") = lower(${source}::text)
+      order by f."n" desc, (f."form" in (select p."form" from ${presetValuesSql})) desc, f."form" collate "C"
+      limit 1
+    ),
+    (select p."form" from ${presetValuesSql} where lower(p."form") = lower(${source}::text) limit 1),
+    ${source}::text
+  )`;
+}
+
+/**
+ * Suggestions for the source field: the user's sources (most used first, then byte order), then the
+ * presets they do not already have, case-insensitively unique.
+ */
+export async function listSourceSuggestions(db: Db, userId: string): Promise<string[]> {
+  const result = await db.execute(sql`
+    select f."form" from (
+      select ${normalizedSourceSql(sql`a."source"`)} as "form", count(*) as "n"
+      from "application" a
+      where a."user_id" = ${userId} and a."source" is not null
+      group by 1
+    ) f
+    where f."form" is not null
+    order by f."n" desc, f."form" collate "C"
+  `);
+  return sourceSuggestions(rowsOf<{ form: string }>(result).map((row) => row.form));
+}
+
 /** The user's applications, archived or not, by applied date (newest first, undated last). */
 export async function listApplications(
   db: Db,
@@ -173,8 +228,9 @@ async function loaded(db: Db, userId: string, id: string): Promise<ApplicationRe
 /**
  * Validates the input, finds or creates the company by name and stores a new application at the
  * bottom of its stage's column. The insert and its first transition (null → stage) are one
- * statement; created after the first stage without an applied date, the application gets today's
- * date in the user's time zone. A second one in the same transaction creates, in an active stage, its automatic
+ * statement; created in a non-wishlist stage without an applied date, the application gets today's
+ * date in the user's time zone. The source is stored in the user's existing spelling
+ * (`canonicalSourceSql`). A second one in the same transaction creates, in an active stage, its automatic
  * follow-up reminder (`syncFollowUpSql`).
  */
 export async function createApplication(db: Db, userId: string, input: unknown): Promise<ApplicationResult> {
@@ -194,10 +250,11 @@ export async function createApplication(db: Db, userId: string, input: unknown):
       insert into "application"
         ("id", "user_id", "company_id", "stage_id", "role", "url", "source", "salary_range", "salary_currency",
           "applied_at", "position")
-      values (${id}, ${userId}, ${target.id}, ${stageId}, ${fields.role}, ${fields.url}, ${fields.source},
+      values (${id}, ${userId}, ${target.id}, ${stageId}, ${fields.role}, ${fields.url},
+        ${canonicalSourceSql(userId, fields.source)},
         ${fields.salaryRange}, ${fields.salaryCurrency},
         coalesce(${fields.appliedAt}::date,
-          case when ${isAfterFirstStageSql(userId, sql`${stageId}`)} then ${userLocalDateSql(userId)} end),
+          case when ${isAppliedStageSql(userId, sql`${stageId}`)} then ${userLocalDateSql(userId)} end),
         ${position})
       returning "id", "user_id", "stage_id", "created_at"
     ),
@@ -217,8 +274,8 @@ export async function createApplication(db: Db, userId: string, input: unknown):
  * Replaces the editable fields of the user's application. Ownership is checked first,
  * so a foreign or unknown id never creates a company for the caller. A missing `stageId`
  * keeps the current stage. A new stage puts the application at the bottom of that column and
- * appends a transition in the same statement as the update; when that stage comes after the first
- * one and no applied date was entered, the date of the move in the user's time zone is stored. A new company unlinks the contacts of
+ * appends a transition in the same statement as the update; when that stage is not a wishlist
+ * stage and no applied date was entered, the date of the move in the user's time zone is stored. A new company unlinks the contacts of
  * the old one in that statement too. A second statement in the same transaction syncs the automatic
  * follow-up reminder like a board move does (`syncFollowUpSql`).
  */
@@ -252,11 +309,11 @@ export async function updateApplication(
         "stage_id" = ${stageId},
         "role" = ${fields.role},
         "url" = ${fields.url},
-        "source" = ${fields.source},
+        "source" = ${canonicalSourceSql(userId, fields.source, id)},
         "salary_range" = ${fields.salaryRange},
         "salary_currency" = ${fields.salaryCurrency},
         "applied_at" = coalesce(${fields.appliedAt}::date,
-          case when c."stage_id" <> ${stageId} and ${isAfterFirstStageSql(userId, sql`${stageId}`)}
+          case when c."stage_id" <> ${stageId} and ${isAppliedStageSql(userId, sql`${stageId}`)}
             then ${userLocalDateSql(userId)} end),
         "position" = case when c."stage_id" = ${stageId} then a."position" else ${position} end,
         "updated_at" = now()

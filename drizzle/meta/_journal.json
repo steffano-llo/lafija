@@ -64,6 +64,20 @@
       "when": 1794874193631,
       "tag": "0008_email_claim_lease",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1794886714049,
+      "tag": "0009_wishlist_stage_category",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1794886717391,
+      "tag": "0010_unify_sources",
+      "breakpoints": true
     }
   ]
 }

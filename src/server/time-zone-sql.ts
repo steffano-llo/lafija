@@ -22,12 +22,11 @@ export function userLocalDateSql(userId: string): SQL {
 }
 
 /**
- * True when the stage comes after the user's first stage: its position is greater than the
- * smallest position among the user's non-archived stages (applied-date autofill, S13).
+ * True when the stage makes an application applied: it is one of the user's stages and its category
+ * is not `wishlist` (applied-date autofill, S13 as amended by S21). Unknown stages are false.
  */
-export function isAfterFirstStageSql(userId: string, stageId: SQL): SQL {
+export function isAppliedStageSql(userId: string, stageId: SQL): SQL {
   return sql`coalesce((
-    (select s."position" from "stage" s where s."id" = ${stageId} and s."user_id" = ${userId})
-    > (select min(s."position") from "stage" s where s."user_id" = ${userId} and s."archived" = false)
+    select s."category" <> 'wishlist' from "stage" s where s."id" = ${stageId} and s."user_id" = ${userId}
   ), false)`;
 }

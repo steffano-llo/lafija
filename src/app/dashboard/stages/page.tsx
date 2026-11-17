@@ -43,8 +43,10 @@ export default function StagesPage() {
           <h1 className="text-2xl font-semibold">Stages</h1>
           <p className="text-sm text-muted-foreground">
             Stages are the columns your applications move through, in this order. The category says what a stage
-            means for your statistics. A stage that applications use or have been in cannot be deleted, only archived, and you can
-            archive it once its active applications have moved on.
+            means for your statistics. Use the Wishlist category for jobs you have not applied to yet: they get no
+            follow-up reminders and are left out of the response rate until they reach any other stage. A stage that
+            applications use or have been in cannot be deleted, only archived, and you can archive it once its active
+            applications have moved on.
           </p>
         </div>
         <section aria-labelledby="new-stage-heading" className="flex flex-col gap-3">
