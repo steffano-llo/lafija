@@ -8,7 +8,7 @@ import { createTestDb } from "@/test/db";
 import type { OutgoingEmail, SendResult } from "./email/types";
 import { resendVerificationEmail } from "./email/verification";
 import type { EmailConfig, EmailState } from "./env";
-import { createAuth, getUserFromHeaders, type Auth } from "./auth";
+import { createAuth, getUserFromHeaders, withDemoSignUp, type Auth } from "./auth";
 
 const SECRET = "test-secret-with-at-least-thirty-two-chars";
 
@@ -385,6 +385,95 @@ describe("Google sign-in for a returning user", () => {
     await googleCallback({ sub: "google-sub-g1", email: "g1@example.com", emailVerified: true });
 
     await expect(signUp("g1@example.com", "attacker-pass")).rejects.toMatchObject({ statusCode: 422 });
+  });
+});
+
+// S23 (T10.1): only createDemoAccount may create a demo-domain user; every public path is refused.
+describe("the demo email domain is reserved (S23)", () => {
+  const RESERVED = { code: "EMAIL_DOMAIN_RESERVED", message: "This email domain is reserved." };
+
+  async function authRows() {
+    const [users, accounts, sessions] = await Promise.all([
+      db.select().from(schema.user),
+      db.select().from(schema.account),
+      db.select().from(schema.session),
+    ]);
+    return { users, accounts, sessions };
+  }
+
+  it.each(["pub@demo.lafija.invalid", "PUB@DEMO.LAFIJA.INVALID", "Pub@Demo.Lafija.Invalid"])(
+    "refuses auth.api sign-up for %s and creates no rows",
+    async (email) => {
+      const before = await authRows();
+
+      await expect(signUp(email)).rejects.toMatchObject({ statusCode: 400, body: RESERVED });
+      expect(await authRows()).toEqual(before);
+    },
+  );
+
+  it("refuses the HTTP sign-up route, even with fabricated demo headers and body fields", async () => {
+    const before = await authRows();
+    for (const [extraHeaders, extraBody] of [
+      [{}, {}],
+      [{ "x-lafija-demo": "1", "x-demo-signup": "true", "x-internal": SECRET }, { demo: true, isDemo: true, internal: SECRET }],
+    ] as const) {
+      const response = await auth.handler(
+        new Request("http://localhost:3000/api/auth/sign-up/email", {
+          method: "POST",
+          headers: { "content-type": "application/json", origin: "http://localhost:3000", ...extraHeaders },
+          body: JSON.stringify({ name: "Mallory", email: "Mallory@Demo.Lafija.Invalid", password: "correct-horse-battery", ...extraBody }),
+        }),
+      );
+      expect(response.status).toBe(400);
+      expect(await response.json()).toMatchObject(RESERVED);
+      expect(response.headers.getSetCookie().join(";")).not.toContain("session_token");
+    }
+    expect(await authRows()).toEqual(before);
+  });
+
+  it("refuses a Google sign-in whose email has the demo domain and returns to sign-in with the reason", async () => {
+    const before = await authRows();
+
+    const response = await googleCallback({ sub: "google-sub-demo", email: "G@Demo.Lafija.Invalid", emailVerified: true });
+
+    expect(response.status).toBe(302);
+    const location = new URL(response.headers.get("location")!);
+    expect(`${location.origin}${location.pathname}`).toBe("http://localhost:3000/sign-in");
+    expect(location.searchParams.get("error")).toBe("EMAIL_DOMAIN_RESERVED");
+    expect(response.headers.getSetCookie().join(";")).not.toContain("session_token");
+    expect(await authRows()).toEqual(before);
+  });
+
+  it("allows a demo-domain sign-up only inside withDemoSignUp, and only for that exact address", async () => {
+    const before = await authRows();
+    await expect(
+      withDemoSignUp("demo-a@demo.lafija.invalid", () => signUp("demo-b@demo.lafija.invalid")),
+    ).rejects.toMatchObject({ statusCode: 400, body: RESERVED });
+    expect(await authRows()).toEqual(before);
+
+    await expect(
+      withDemoSignUp("demo-a@demo.lafija.invalid", () => signUp("demo-a@demo.lafija.invalid")),
+    ).resolves.toMatchObject({ user: { email: "demo-a@demo.lafija.invalid" } });
+  });
+
+  it("does not leak the marker to a concurrent public sign-up", async () => {
+    const results = await Promise.allSettled([
+      withDemoSignUp("demo-c@demo.lafija.invalid", async () => {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        return signUp("demo-c@demo.lafija.invalid");
+      }),
+      signUp("demo-c2@demo.lafija.invalid"),
+    ]);
+
+    expect(results[0].status).toBe("fulfilled");
+    expect(results[1]).toMatchObject({ status: "rejected", reason: { body: RESERVED } });
+    expect((await db.select().from(schema.user).where(eq(schema.user.email, "demo-c2@demo.lafija.invalid")))).toEqual([]);
+  });
+
+  it("still signs up addresses that only look like the demo domain", async () => {
+    for (const email of ["x@notdemo.lafija.invalid", "x@demo.lafija.invalid.example.com"]) {
+      await expect(signUp(email)).resolves.toMatchObject({ user: { email } });
+    }
   });
 });
 

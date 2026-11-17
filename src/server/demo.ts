@@ -3,7 +3,7 @@ import "server-only";
 import { randomBytes } from "node:crypto";
 import { eq, sql } from "drizzle-orm";
 import { demoAccount } from "@/db/schema";
-import type { Auth } from "@/lib/auth";
+import { withDemoSignUp, type Auth } from "@/lib/auth";
 import {
   DEMO_ACCOUNT_LIMIT,
   DEMO_EMAIL_DOMAIN,
@@ -70,6 +70,8 @@ async function discardDemoUser(db: Db, userId: string): Promise<void> {
  *   dist/api/rate-limiter/index.mjs `getDefaultSpecialRules`) applies; direct `auth.api` calls skip
  *   it (dist/api/index.mjs:175 only runs it in the router). Rate limiting is on in production only.
  * No email is ever sent: the verification sender skips demo addresses (`src/lib/email/verification.ts`).
+ * Public sign-up refuses the demo domain; this sign-up runs inside `withDemoSignUp(email)`, the
+ * in-process marker that lets Better Auth's `user.create.before` hook accept this one address.
  */
 export async function createDemoAccount(
   auth: Auth,
@@ -87,12 +89,14 @@ export async function createDemoAccount(
   const password = randomBytes(24).toString("base64url");
   const headers = new Headers({ "content-type": "application/json", origin: new URL(baseURL).origin });
   if (clientIp) headers.set("x-forwarded-for", clientIp);
-  const response = await auth.handler(
-    new Request(new URL("/api/auth/sign-up/email", baseURL), {
-      method: "POST",
-      headers,
-      body: JSON.stringify({ name: "Demo user", email, password }),
-    }),
+  const response = await withDemoSignUp(email, () =>
+    auth.handler(
+      new Request(new URL("/api/auth/sign-up/email", baseURL), {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ name: "Demo user", email, password }),
+      }),
+    ),
   );
   if (response.status === 429) return { ok: false, reason: "rate_limited" };
   if (!response.ok) return { ok: false, reason: "failed" };
@@ -142,10 +146,14 @@ export async function getDemoAccount(
 }
 
 /**
- * Deletes expired demo accounts (S6, S23) in one statement: users that have a `demo_account` row
- * whose `expires_at` is before `now` AND whose address has the demo domain (both conditions, defense
- * in depth on top of the database refusing demo rows for real accounts), oldest expiry first, at
- * most `batchSize`. Foreign keys cascade to all of their data. Returns the count only.
+ * Deletes expired demo accounts (S6, S23) in one statement. Candidates are
+ * - users with a `demo_account` row whose `expires_at` is before `now`, and
+ * - orphans (T10.1): demo-domain users with NO `demo_account` row created more than 24 hours before
+ *   `now` (a crash between the demo sign-up and its demo row). Public sign-up refuses the demo
+ *   domain (`src/lib/auth.ts`), so every demo-domain user was created by `createDemoAccount`.
+ * Oldest due time first (expiry, or created_at + 24 h for an orphan), at most `batchSize` in total.
+ * Every deleted user must also have an address in the demo domain (lower case, as Better Auth stores
+ * it), so a real account can never match. Foreign keys cascade to all of their data. Returns the count only.
  */
 export async function deleteExpiredDemoAccounts(
   db: Db,
@@ -155,9 +163,16 @@ export async function deleteExpiredDemoAccounts(
   const result = await db.execute(sql`
     delete from "user" u
     where u."id" in (
-        select d."user_id" from "demo_account" d
-        where d."expires_at" < ${at}::timestamptz and d."email" like ${DEMO_EMAIL_LIKE}
-        order by d."expires_at", d."user_id"
+        select c."id" from (
+          select d."user_id" as "id", d."expires_at" as "due" from "demo_account" d
+          where d."expires_at" < ${at}::timestamptz and d."email" like ${DEMO_EMAIL_LIKE}
+          union all
+          select o."id", o."created_at" + make_interval(hours => ${DEMO_LIFETIME_HOURS}) from "user" o
+          where o."email" like ${DEMO_EMAIL_LIKE}
+            and o."created_at" < ${at}::timestamptz - make_interval(hours => ${DEMO_LIFETIME_HOURS})
+            and not exists (select 1 from "demo_account" x where x."user_id" = o."id")
+        ) c
+        order by c."due", c."id"
         limit ${batchSize}
       )
       and u."email" like ${DEMO_EMAIL_LIKE}

@@ -286,11 +286,10 @@ describe("demo users never receive email (S23)", () => {
     await db.execute(sql`update "user" set "email_verified" = true where "id" = ${real.id}`);
     const { seedDemoData } = await import("./demo-seed");
     await seedDemoData(db, real.id, new Date());
-    // A demo-domain address without a demo row (crafted) is excluded by the domain alone.
-    const { user: crafted } = await auth.api.signUpEmail({
-      body: { name: "Crafted", email: "crafted-digest@demo.lafija.invalid", password: "correct-horse-battery" },
-    });
-    await db.execute(sql`update "user" set "email_verified" = true where "id" = ${crafted.id}`);
+    // A demo-domain address without a demo row (an orphan; public sign-up refuses the domain, so it
+    // is written directly) is excluded by the domain alone.
+    const crafted = { id: "crafted-digest-user" };
+    await db.insert(user).values({ id: crafted.id, name: "Crafted", email: "crafted-digest@demo.lafija.invalid", emailVerified: true });
     await seedDemoData(db, crafted.id, new Date());
 
     sent.length = 0;

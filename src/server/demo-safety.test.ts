@@ -11,8 +11,10 @@ const { seedDemoData } = await import("./demo-seed");
 const { rowsOf } = await import("./board");
 
 // S23: "que el borrado no pueda aplicarse jamás a una cuenta real. Agrega un test que lo demuestre."
-// A real account is any user without a demo_account row; the database itself refuses a demo row for
-// a real address, and cleanup needs both the row (expired) and the demo email domain.
+// A real account is any user whose address is not in the demo domain; the database itself refuses a
+// demo row for a real address, public sign-up refuses the demo domain (T10.1), and cleanup only ever
+// deletes users whose stored address ends in the demo domain: an expired demo row, or no demo row at
+// all and created more than 24 hours ago (an orphan from a crash between sign-up and the demo row).
 
 type TestDb = Awaited<ReturnType<typeof createTestDb>>["db"];
 let db: TestDb;
@@ -130,20 +132,26 @@ describe("the database refuses demo rows for real accounts (S23)", () => {
 
 describe("demo cleanup never touches a real account (S23)", () => {
   let realOldId: string;
-  let craftedId: string;
+  let lookalikeIds: string[];
+  let orphanId: string;
   let upperId: string;
   let expiredIds: string[];
   let liveId: string;
 
   beforeAll(async () => {
     const longAgo = new Date(Date.now() - 400 * 24 * HOUR);
-    // Real users: an old one, one whose address has the demo domain but no demo row (a crafted
-    // public sign-up), and one with the domain in upper case inserted behind Better Auth's back.
+    // Real users: an old one and two whose addresses only look like the demo domain.
     realOldId = await signUp("old-real@example.com");
-    craftedId = await signUp("crafted@demo.lafija.invalid");
+    lookalikeIds = [await signUp("x@notdemo.lafija.invalid"), await signUp("x@demo.lafija.invalid.example.com")];
+    // An orphan: a demo-domain user without a demo row (public sign-up refuses the domain, so it
+    // is written directly, like a crash between the demo sign-up and its demo row).
+    orphanId = "orphan-demo-user";
+    await db.insert(user).values({ id: orphanId, name: "Orphan", email: "demo-orphan@demo.lafija.invalid" });
+    // The domain in upper case, written behind Better Auth's back (Better Auth stores addresses lower
+    // case): cleanup matches the stored lower-case form only, so it is left alone.
     upperId = "upper-case-real-user";
     await db.insert(user).values({ id: upperId, name: "Upper", email: "SOMEONE@DEMO.LAFIJA.INVALID" });
-    for (const id of [realOldId, craftedId, upperId]) {
+    for (const id of [realOldId, ...lookalikeIds, orphanId, upperId]) {
       await db.execute(sql`update "user" set "created_at" = ${longAgo.toISOString()}::timestamptz where "id" = ${id}`);
       await seedDemoData(db, id, longAgo);
     }
@@ -151,7 +159,7 @@ describe("demo cleanup never touches a real account (S23)", () => {
     liveId = await demo(new Date(Date.now() - 23 * HOUR));
   });
 
-  it("(c) deletes exactly the expired demo users and leaves every other row byte-identical", async () => {
+  it("(c) deletes exactly the expired demo users and the old orphan, and leaves every other row byte-identical", async () => {
     const before = await snapshot();
     // The expired demos really own rows in the tables the cascade must clear.
     for (const table of ["user", "session", "account", "demo_account", "stage", "company", "application",
@@ -159,11 +167,11 @@ describe("demo cleanup never touches a real account (S23)", () => {
       expect(before[table].filter((row) => expiredIds.includes(row.owner ?? "")).length, table).toBeGreaterThan(0);
     }
 
-    expect(await deleteExpiredDemoAccounts(db)).toEqual({ deleted: 2 });
+    expect(await deleteExpiredDemoAccounts(db)).toEqual({ deleted: 3 });
 
     const after = await snapshot();
-    expect(after).toEqual(without(before, expiredIds));
-    for (const id of [realOldId, craftedId, upperId, liveId]) {
+    expect(after).toEqual(without(before, [...expiredIds, orphanId]));
+    for (const id of [realOldId, ...lookalikeIds, upperId, liveId]) {
       expect(after.user.some((row) => row.owner === id), id).toBe(true);
     }
   });
@@ -171,7 +179,7 @@ describe("demo cleanup never touches a real account (S23)", () => {
   it("(e) the cascade removed every row of the deleted demo users", async () => {
     const after = await snapshot();
     for (const [table, rows] of Object.entries(after)) {
-      expect(rows.filter((row) => expiredIds.includes(row.owner ?? "")), table).toEqual([]);
+      expect(rows.filter((row) => [...expiredIds, orphanId].includes(row.owner ?? "")), table).toEqual([]);
     }
   });
 
@@ -194,7 +202,7 @@ describe("demo cleanup never touches a real account (S23)", () => {
     expect(await deleteExpiredDemoAccounts(db, { now: new Date(Date.now() + 2 * HOUR) })).toEqual({ deleted: 1 });
     const after = await snapshot();
     expect(after).toEqual(without(before, [extra, liveId]));
-    for (const id of [realOldId, craftedId, upperId]) {
+    for (const id of [realOldId, ...lookalikeIds, upperId]) {
       expect(after.user.some((row) => row.owner === id), id).toBe(true);
     }
   });
@@ -203,7 +211,7 @@ describe("demo cleanup never touches a real account (S23)", () => {
     const before = await snapshot();
     const demoIds = before.demo_account.map((row) => row.owner!);
     const realIds = before.user.map((row) => row.owner!).filter((id) => !demoIds.includes(id));
-    expect(realIds).toEqual(expect.arrayContaining([realOldId, craftedId, upperId]));
+    expect(realIds).toEqual(expect.arrayContaining([realOldId, ...lookalikeIds, upperId]));
 
     expect(await deleteExpiredDemoAccounts(db, { now: new Date(Date.now() + 10 * 365 * 24 * HOUR) })).toEqual({
       deleted: demoIds.length,
@@ -215,5 +223,66 @@ describe("demo cleanup never touches a real account (S23)", () => {
     expect(await deleteExpiredDemoAccounts(db, { now: new Date(Date.now() + 10 * 365 * 24 * HOUR) })).toEqual({
       deleted: 0,
     });
+  });
+});
+
+describe("orphan demo-domain users are cleaned after 24 hours (S23, T10.1)", () => {
+  const MINUTE = 60 * 1000;
+
+  async function orphan(id: string, createdAt: Date): Promise<string> {
+    await db.insert(user).values({ id, name: "Orphan", email: `${id}@demo.lafija.invalid`, createdAt, updatedAt: createdAt });
+    await seedDemoData(db, id, createdAt);
+    return id;
+  }
+
+  it("keeps an orphan 23 h 59 min old, deletes one 24 h 01 min old, and keeps a live demo whatever its user's age", async () => {
+    const now = new Date();
+    const young = await orphan("demo-orphan-young", new Date(now.getTime() - 24 * HOUR + MINUTE));
+    const old = await orphan("demo-orphan-old", new Date(now.getTime() - 24 * HOUR - MINUTE));
+    const live = await demo(now);
+    // A live demo whose user row looks old is not an orphan: its demo row decides.
+    await db.execute(sql`update "user" set "created_at" = now() - interval '400 days' where "id" = ${live}`);
+    const realId = await signUp("orphan-control@example.com");
+    await db.execute(sql`update "user" set "created_at" = now() - interval '400 days' where "id" = ${realId}`);
+    await seedDemoData(db, realId, new Date(now.getTime() - 400 * 24 * HOUR));
+    const before = await snapshot();
+
+    expect(await deleteExpiredDemoAccounts(db, { now })).toEqual({ deleted: 1 });
+
+    const after = await snapshot();
+    expect(after).toEqual(without(before, [old]));
+    for (const id of [young, live, realId]) expect(after.user.some((row) => row.owner === id), id).toBe(true);
+  });
+
+  it("orphans and expired demos share one batch, oldest due first", async () => {
+    const now = new Date();
+    const a = await orphan("demo-orphan-batch-a", new Date(now.getTime() - 50 * HOUR));
+    const b = await demo(new Date(now.getTime() - 49 * HOUR));
+    const c = await orphan("demo-orphan-batch-c", new Date(now.getTime() - 48 * HOUR));
+    const before = await snapshot();
+
+    expect(await deleteExpiredDemoAccounts(db, { now, batchSize: 2 })).toEqual({ deleted: 2 });
+    expect(await snapshot()).toEqual(without(before, [a, b]));
+    expect(await deleteExpiredDemoAccounts(db, { now, batchSize: 2 })).toEqual({ deleted: 1 });
+    expect(await snapshot()).toEqual(without(before, [a, b, c]));
+  });
+
+  it("far in the future, every user outside the demo domain keeps every row byte-identical", async () => {
+    await orphan("demo-orphan-future", new Date());
+    await demo(new Date());
+    const real = rowsOf<{ id: string }>(
+      await db.execute(sql`select "id" from "user" where "email" not like '%@demo.lafija.invalid'`),
+    ).map((row) => row.id);
+    expect(real.length).toBeGreaterThan(5);
+    const keep = (snap: Awaited<ReturnType<typeof snapshot>>) =>
+      Object.fromEntries(Object.entries(snap).map(([table, rows]) => [table, rows.filter((row) => real.includes(row.owner ?? ""))]));
+    const before = await snapshot();
+
+    const { deleted } = await deleteExpiredDemoAccounts(db, { now: new Date(Date.now() + 10 * 365 * 24 * HOUR), batchSize: 10_000 });
+
+    expect(deleted).toBeGreaterThanOrEqual(2);
+    const after = await snapshot();
+    expect(keep(after)).toEqual(keep(before));
+    expect(after.user.map((row) => row.owner).sort()).toEqual([...real].sort());
   });
 });

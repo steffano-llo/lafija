@@ -8,6 +8,10 @@ describe("signInErrorMessage", () => {
     );
   });
 
+  it("explains that Google was refused for an address in the reserved demo domain", () => {
+    expect(signInErrorMessage("EMAIL_DOMAIN_RESERVED")).toBe("This email domain is reserved.");
+  });
+
   it("falls back to a generic message for other codes", () => {
     expect(signInErrorMessage("state_mismatch")).toBe("Sign-in failed. Please try again.");
   });

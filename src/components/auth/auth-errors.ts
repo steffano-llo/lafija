@@ -4,6 +4,8 @@ const SIGN_IN_ERRORS: Record<string, string> = {
   // Better Auth refuses Google sign-in for an email that already has an account,
   // because implicit account linking is disabled (src/lib/auth.ts).
   account_not_linked: "An account with this email already exists. Sign in with your email and password.",
+  // Google sign-in with an address in the demo domain, which only "Try the demo" may create (S23).
+  EMAIL_DOMAIN_RESERVED: "This email domain is reserved.",
 };
 
 /** English message for the `?error=` code Better Auth adds when it redirects to /sign-in. */

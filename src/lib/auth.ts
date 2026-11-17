@@ -1,4 +1,6 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { betterAuth } from "better-auth";
+import { APIError } from "better-auth/api";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import { nextCookies } from "better-auth/next-js";
 import * as schema from "@/db/schema";
@@ -10,7 +12,35 @@ import {
   type VerificationDelivery,
 } from "@/lib/email/verification";
 import { getEmailState, getEnv } from "@/lib/env";
+import { isDemoEmail } from "@/lib/validation/demo";
 import type { Db } from "@/server/applications";
+
+/** Shown on the sign-up form (HTTP 400 body) and, for Google, on /sign-in via `?error=` (S9, S23). */
+export const EMAIL_DOMAIN_RESERVED = {
+  code: "EMAIL_DOMAIN_RESERVED",
+  message: "This email domain is reserved.",
+} as const;
+
+/**
+ * The internal marker that lets one demo-domain address be created (S23, T10.1). It lives in this
+ * process's memory only: `withDemoSignUp` sets it for the async work it runs (createDemoAccount's own
+ * sign-up through `auth.handler`), and AsyncLocalStorage hands it only to code started inside that
+ * call. Nothing in an HTTP request (headers, cookies, body) can set it, so a client cannot forge it.
+ */
+const demoSignUp = new AsyncLocalStorage<{ email: string }>();
+
+/** Runs `fn` with permission to create the user `email` (exactly that address) in the demo domain. */
+export function withDemoSignUp<T>(email: string, fn: () => Promise<T>): Promise<T> {
+  return demoSignUp.run({ email: email.trim().toLowerCase() }, fn);
+}
+
+/** Better Auth `user.create.before`: refuses a demo-domain user outside `withDemoSignUp` for that address. */
+async function refuseReservedDomain(user: { email?: string | null }): Promise<void> {
+  const email = (user.email ?? "").trim().toLowerCase();
+  if (!isDemoEmail(email)) return;
+  if (demoSignUp.getStore()?.email === email) return;
+  throw new APIError("BAD_REQUEST", { ...EMAIL_DOMAIN_RESERVED });
+}
 
 export interface AuthConfig {
   db: Db;
@@ -64,6 +94,18 @@ export function createAuth({ db, secret, baseURL, google, emailDelivery = null, 
       encryptOAuthTokens: true,
     },
     databaseHooks: {
+      user: {
+        // Every user creation goes through createWithHooks (dist/db/with-hooks.mjs:7-23), both
+        // email/password sign-up (internalAdapter.createUser, dist/api/routes/sign-up.mjs:223-234,
+        // which rethrows our APIError) and OAuth sign-up (dist/oauth2/link-account.mjs:308-340, the
+        // callback redirects with its code, dist/api/routes/callback.mjs:152-153). Throwing here
+        // happens before the insert, so a refused sign-up writes nothing.
+        create: {
+          before: async (user) => {
+            await refuseReservedDomain(user);
+          },
+        },
+      },
       account: {
         // Better Auth stores the id token as received (encryptOAuthTokens skips it) and
         // the app never reads it after sign-in, so it is not stored at all.
