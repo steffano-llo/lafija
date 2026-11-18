@@ -2,7 +2,7 @@
 
 Job application tracker: register applications, move them through configurable stages on a kanban board, log interviews and contacts, get follow-up reminders by email, and see statistics about your search.
 
-> Work in progress. Specification and task list: [`odd/tasks/lafija.md`](odd/tasks/lafija.md).
+> Work in progress: deployment instructions are being added.
 
 ## Stack
 
