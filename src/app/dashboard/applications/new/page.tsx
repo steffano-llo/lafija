@@ -1,0 +1,57 @@
+import type { Metadata } from "next";
+import Link from "next/link";
+import { Suspense } from "react";
+import { DashboardHeader } from "@/components/reminders/dashboard-header";
+import { ApplicationForm } from "@/components/applications/application-form";
+import { getDb } from "@/db";
+import { requireUser } from "@/lib/session";
+import { listCompanies, listSourceSuggestions } from "@/server/applications";
+import { getUserSettings } from "@/server/settings";
+import { listStages } from "@/server/stages";
+import { createApplicationAction } from "../actions";
+
+export const metadata: Metadata = { title: "New application · laFija" };
+
+async function NewApplicationForm() {
+  const user = await requireUser();
+  const db = getDb();
+  const [companies, sources, stages, settings] = await Promise.all([
+    listCompanies(db, user.id),
+    listSourceSuggestions(db, user.id),
+    listStages(db, user.id),
+    getUserSettings(db, user.id),
+  ]);
+  const activeStages = stages.filter((stage) => !stage.archived);
+  return (
+    <ApplicationForm
+      action={createApplicationAction}
+      // New applications start in the first active stage unless the user picks another.
+      // The salary currency starts as the user's default (Settings).
+      initialValues={{ stageId: activeStages[0]?.id, salaryCurrency: settings.defaultCurrency }}
+      companies={companies.map((company) => company.name)}
+      sources={sources}
+      stages={activeStages.map(({ id, name }) => ({ id, name }))}
+      timeZone={settings.timeZone}
+      submitLabel="Save application"
+    />
+  );
+}
+
+export default function NewApplicationPage() {
+  return (
+    <>
+      <DashboardHeader />
+      <main className="mx-auto flex w-full max-w-4xl flex-1 flex-col gap-6 px-6 py-12">
+        <div className="flex flex-col gap-1">
+          <Link href="/dashboard/applications" className="text-sm text-muted-foreground hover:underline">
+            ← Applications
+          </Link>
+          <h1 className="text-2xl font-semibold">New application</h1>
+        </div>
+        <Suspense fallback={<p className="text-muted-foreground">Loading…</p>}>
+          <NewApplicationForm />
+        </Suspense>
+      </main>
+    </>
+  );
+}

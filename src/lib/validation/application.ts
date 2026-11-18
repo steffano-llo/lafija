@@ -1,0 +1,162 @@
+import { z } from "zod";
+import { CURRENCY_INVALID_MESSAGE, isCurrencyCode } from "./settings";
+import { normalizeSource } from "./source";
+
+export const APPLICATION_LIMITS = {
+  companyName: 120,
+  role: 120,
+  url: 2048,
+  source: 80,
+  salaryRange: 80,
+} as const;
+
+/** Furthest time zone ahead of UTC: a date that is "today" anywhere on Earth is never rejected. */
+const MAX_UTC_OFFSET_MS = 14 * 60 * 60 * 1000;
+
+/** Latest calendar date (YYYY-MM-DD) that is not in the future for some time zone. */
+export function latestAllowedDate(now: Date = new Date()): string {
+  return new Date(now.getTime() + MAX_UTC_OFFSET_MS).toISOString().slice(0, 10);
+}
+
+export const FUTURE_DATE_WARNING = "This date is in the future.";
+
+/** Today (YYYY-MM-DD) in the zone; the runtime's zone when none is given or it is unknown. */
+function todayIn(timeZone: string | undefined, now: Date): string {
+  const format = (zone: string | undefined) =>
+    new Intl.DateTimeFormat("en-CA", { timeZone: zone, year: "numeric", month: "2-digit", day: "2-digit" }).format(now);
+  try {
+    return format(timeZone);
+  } catch {
+    return format(undefined);
+  }
+}
+
+/**
+ * True when `value` is a valid date after today in the user's zone (S22: the form warns, without
+ * blocking). The server still applies `latestAllowedDate`.
+ */
+export function isFutureDate(value: string, timeZone?: string, now: Date = new Date()): boolean {
+  return isCalendarDate(value) && value > todayIn(timeZone, now);
+}
+
+function isCalendarDate(value: string): boolean {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+  if (!match) return false;
+  const [year, month, day] = match.slice(1).map(Number);
+  const parsed = new Date(Date.UTC(year, month - 1, day));
+  return parsed.getUTCFullYear() === year && parsed.getUTCMonth() === month - 1 && parsed.getUTCDate() === day;
+}
+
+export function isHttpUrl(value: string): boolean {
+  if (!/^https?:\/\//i.test(value)) return false;
+  try {
+    const url = new URL(value);
+    return (url.protocol === "http:" || url.protocol === "https:") && url.hostname !== "";
+  } catch {
+    return false;
+  }
+}
+
+function requiredText(label: string, max: number) {
+  return z
+    .string({ error: `${label} is required.` })
+    .trim()
+    .min(1, `${label} is required.`)
+    .max(max, `${label} must be at most ${max} characters.`);
+}
+
+/** Optional text: trimmed, and blank or missing becomes null. */
+export function optionalText(schema: z.ZodType<string>) {
+  return z.preprocess(
+    (value) => {
+      if (value === undefined || value === null) return null;
+      if (typeof value !== "string") return value;
+      const trimmed = value.trim();
+      return trimmed === "" ? null : trimmed;
+    },
+    schema.nullable(),
+  );
+}
+
+export const SALARY_CURRENCY_REQUIRED_MESSAGE = "Choose the currency of the salary.";
+
+const applicationFieldsSchema = z.object({
+  companyName: requiredText("Company", APPLICATION_LIMITS.companyName),
+  role: requiredText("Role", APPLICATION_LIMITS.role),
+  url: optionalText(
+    z
+      .string({ error: "Enter a valid http(s) URL." })
+      .max(APPLICATION_LIMITS.url, `URL must be at most ${APPLICATION_LIMITS.url} characters.`)
+      .refine(isHttpUrl, { message: "Enter a valid http(s) URL.", abort: true }),
+  ),
+  // Inner whitespace collapsed too (S20); the server then picks the user's or the preset spelling.
+  source: z.preprocess(
+    (value) => (typeof value === "string" ? (normalizeSource(value) ?? "") : value),
+    optionalText(
+      z
+        .string({ error: "Enter a valid source." })
+        .max(APPLICATION_LIMITS.source, `Source must be at most ${APPLICATION_LIMITS.source} characters.`),
+    ),
+  ),
+  salaryRange: optionalText(
+    z
+      .string({ error: "Enter a valid salary range." })
+      .max(
+        APPLICATION_LIMITS.salaryRange,
+        `Salary range must be at most ${APPLICATION_LIMITS.salaryRange} characters.`,
+      ),
+  ),
+  // ISO 4217 code; required with a salary (checked below) and dropped without one.
+  salaryCurrency: optionalText(z.string({ error: CURRENCY_INVALID_MESSAGE }).refine(isCurrencyCode, CURRENCY_INVALID_MESSAGE)),
+  appliedAt: optionalText(
+    z
+      .string({ error: "Enter a valid date." })
+      .refine(isCalendarDate, { message: "Enter a valid date.", abort: true })
+      .refine((value) => value <= latestAllowedDate(), "Applied date cannot be in the future."),
+  ),
+  // Blank or missing means "the first active stage"; ownership is checked against the database.
+  stageId: z.preprocess(
+    (value) => (typeof value === "string" && value.trim() === "" ? undefined : value),
+    z.string({ error: "Choose a valid stage." }).trim().max(64, "Choose a valid stage.").optional(),
+  ),
+});
+
+export const applicationInputSchema = applicationFieldsSchema
+  .superRefine((data, ctx) => {
+    // A salary over the length limit already has its own error.
+    const salary = data.salaryRange;
+    if (typeof salary === "string" && salary.length <= APPLICATION_LIMITS.salaryRange && data.salaryCurrency === null) {
+      ctx.addIssue({ code: "custom", path: ["salaryCurrency"], message: SALARY_CURRENCY_REQUIRED_MESSAGE });
+    }
+  })
+  // The form always posts the preselected currency; without a salary there is nothing to qualify.
+  .transform((data) => (data.salaryRange === null ? { ...data, salaryCurrency: null } : data));
+
+export type ApplicationInput = z.output<typeof applicationInputSchema>;
+export type ApplicationField = keyof ApplicationInput;
+export type FieldErrors = Partial<Record<ApplicationField, string[]>>;
+
+export function parseApplicationInput(
+  input: unknown,
+): { success: true; data: ApplicationInput } | { success: false; fieldErrors: FieldErrors } {
+  const result = applicationInputSchema.safeParse(input ?? {});
+  if (result.success) return { success: true, data: result.data };
+  return { success: false, fieldErrors: z.flattenError(result.error).fieldErrors };
+}
+
+export const NOTES_MAX = 10_000;
+
+/** Free notes on an application: optional text (blank clears them), at most `NOTES_MAX` characters. */
+export const notesInputSchema = z.object({
+  notes: optionalText(
+    z.string({ error: "Enter valid notes." }).max(NOTES_MAX, `Notes must be at most ${NOTES_MAX} characters.`),
+  ),
+});
+
+export function parseNotesInput(
+  input: unknown,
+): { success: true; data: { notes: string | null } } | { success: false; fieldErrors: { notes?: string[] } } {
+  const result = notesInputSchema.safeParse(input ?? {});
+  if (result.success) return { success: true, data: result.data };
+  return { success: false, fieldErrors: z.flattenError(result.error).fieldErrors };
+}
